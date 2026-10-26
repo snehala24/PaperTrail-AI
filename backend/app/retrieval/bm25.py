@@ -23,7 +23,10 @@ class BM25Index:
             self.bm25 = None
             return
 
-        tokenized_corpus = [tokenize(c.text) for c in self.chunks]
+        tokenized_corpus = [
+            tokenize(f"{c.section_heading or ''}\n{c.text}".strip())
+            for c in self.chunks
+        ]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
     def search(self, query: str, top_k: int = 50) -> List[Tuple[Chunk, float, int]]:

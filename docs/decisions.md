@@ -69,3 +69,23 @@
   6. *Dehyphenation & Normalized Matching*: Join line-break hyphens (`pow-\nerful` $\to$ `powerful`) when followed by lowercase characters, and apply symmetric hyphen/whitespace normalization during span evaluation.
   7. *Version-Aware Deduplication*: Store `chunker_version` (e.g. `0.2.0`) in document metadata; if stored documents have an older or missing version, re-parse and re-index.
 - **Consequences**: A real 34-page paper yields 130 rich, clean chunks (100 text, 12 figure_ref, 9 table, 9 references restricted strictly to pages 9–11). Headings like `B.7. Inference Acceleration` and `5.2. SVD-Compression Results` are cleanly partitioned and inherited. Stale chunk caches are cleanly invalidated.
+
+## ADR-009: Non-Circular Grounded Benchmark and Chunker Precision Refinement
+- **Status**: Accepted (2026-10-26)
+- **Context**: 
+  1. *Circular Evaluation*: Injected `BENCHMARK_PASSAGES` in `run_retrieval.py` tested retrieval of planted agent-written text rather than real documents.
+  2. *False Heading Over-Extraction*: Numbered lists (`2. Sensitivity (Scale): Standard proxies...`), units (`5.07 GB`), timestamps (`5.00 PM, 15 March 2021`), and algorithm tokens (`N SG`) were matched as headings and stripped from text, causing content loss in Table 9 and mislabeling Section 4.2 as "Sensitivity".
+  3. *Missed Sub-Headings with Dots*: `B.4. Llama 3.1-70B Results` was rejected due to missing periods in the allowed title regex.
+  4. *Figure Reference Misclassification*: Body paragraphs mentioning figures (`Figure 6 illustrates...`) or containing key results were classified as `figure_ref`.
+  5. *Page 1 Title Deletion*: Repeating header logic dropped the main paper title on Page 1.
+  6. *arXiv Reference Deletion*: Substring regex for `arXiv:` dropped valid bibliography entries.
+- **Decision**:
+  1. *Real Document Benchmark*: Eliminate `BENCHMARK_PASSAGES`. Ground all 10 benchmark questions directly in real papers (`2610.32878v1.pdf`) using verified short-quote spans.
+  2. *Heading Retention*: Always append heading lines to the start of the chunk buffer; never discard them from the document text.
+  3. *False Heading Exclusions*: Filter out units (`GB`, `MB`, `PM`, etc.), dates, and list items with explanatory clauses after colons.
+  4. *Heading Title Regex Generalization*: Allow periods (`\.`) in title character classes to capture versions like `3.1`.
+  5. *Strict Figure Caption Classification*: Require caption punctuation (`Figure N:` or `Figure N.`) and short length ($\le 350$ chars) for `figure_ref`. Substantive prose is tagged `text`.
+  6. *Page 1 Header Exemption*: Preserve running headers on Page 1 (`page_idx == 0`).
+  7. *Strict arXiv Watermark Regex*: Match only standalone rotated watermark lines (`ARXIV_SIDEBAR_REGEX`), preserving citations in bibliography.
+  8. *Heading Co-Indexing*: Prepend `section_heading` to chunk text in `BM25Index.build` and dense embeddings so queries for heading terms match reliably.
+- **Consequences**: Zero circular evaluation; 100% empirical retrieval numbers over real stored chunks. Real 34-page paper yields 125 cleanly partitioned chunks with zero false headings and complete table data.

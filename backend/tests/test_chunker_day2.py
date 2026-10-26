@@ -115,6 +115,19 @@ def test_noise_filtering_running_headers_and_page_numbers():
     assert "Advancing SVD-based" not in cleaned[0]
 
 
+def test_page_1_title_not_dropped_by_running_headers():
+    """Title on page 1 (page_idx=0) is preserved even if it matches repeating running header text."""
+    running_headers = {"Advancing SVD-based LLM Compression via Layer-Wise Error Model Search"}
+    raw_blocks = [
+        (0, 0, 100, 20, "Advancing SVD-based LLM Compression via Layer-Wise Error Model Search\n", 0, 0),
+        (0, 50, 100, 100, "1. Introduction\nValid research text.\n", 1, 0),
+    ]
+    cleaned = clean_page_blocks(raw_blocks, running_headers, page_idx=0)
+    assert len(cleaned) == 2
+    assert "Advancing SVD-based" in cleaned[0]
+    assert "1. Introduction" in cleaned[1]
+
+
 def test_caption_never_split_mid_sentence():
     """Never split Figure/Table caption mid-sentence across consecutive blocks."""
     blocks = [

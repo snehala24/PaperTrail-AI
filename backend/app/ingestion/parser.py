@@ -36,15 +36,22 @@ def detect_running_headers(pdf_doc: fitz.Document, page_count: int) -> Set[str]:
     return {line for line, pages in line_page_counts.items() if len(pages) >= threshold}
 
 
+ARXIV_SIDEBAR_REGEX = re.compile(
+    r"^\s*arXiv:\s*\d{4}\.\d{4,5}(?:v\d+)?\s*(?:\[[\w\.\-]+\])?(?:\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})?\s*$",
+    re.IGNORECASE,
+)
+
+
 def clean_page_blocks(
     raw_blocks: List[Tuple],
     running_headers: Set[str],
+    page_idx: int = 1,
 ) -> List[str]:
     """
     Clean extracted text blocks for a page:
-    - Drops running headers (repeated on >= 50% of pages).
+    - Drops running headers on pages 2+ (preserves paper title on page 1).
     - Drops standalone page numbers (lines matching ^\\d+$).
-    - Drops rotated arXiv sidebar text (matching arXiv:\\d{4}.\\d{4,5}).
+    - Drops rotated arXiv sidebar watermark stamp without deleting bibliography citation lines.
     - Drops isolated equation noise (| {z }, Shape, Scale).
     - Dehyphenates line-break hyphens ('pow-\\nerful' -> 'powerful').
     """
@@ -63,14 +70,14 @@ def clean_page_blocks(
             s = line.strip()
             if not s:
                 continue
-            # Drop running headers
-            if s in running_headers:
+            # Drop running headers on page 2+ (never drop document title on page 1)
+            if page_idx > 0 and s in running_headers:
                 continue
             # Drop standalone page numbers
             if re.match(r"^\d+$", s):
                 continue
-            # Drop rotated arXiv sidebar text
-            if re.search(r"arXiv:\s*\d{4}\.\d{4,5}", s, re.IGNORECASE):
+            # Drop rotated arXiv sidebar watermark (preserving inline/bibliography arXiv citations)
+            if ARXIV_SIDEBAR_REGEX.match(s):
                 continue
             # Drop equation fragment lines
             if is_equation_fragment(s):
@@ -141,7 +148,7 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
         page = pdf_doc[page_idx]
 
         raw_blocks = page.get_text("blocks")
-        text_blocks = clean_page_blocks(raw_blocks, running_headers)
+        text_blocks = clean_page_blocks(raw_blocks, running_headers, page_idx=page_idx)
 
         if not text_blocks:
             plain_text = page.get_text("text").strip()

@@ -49,155 +49,27 @@ def load_benchmark_data(eval_dir: Path) -> tuple[List[BenchmarkQuestion], Dict[s
     return questions, gold_by_q
 
 
-BENCHMARK_PASSAGES: Dict[str, Dict[str, Any]] = {
-    "GOLD-001": {
-        "section": "5.3 Optimizer",
-        "text": (
-            "5.3 Optimizer. We used the Adam optimizer with beta1 = 0.9, beta2 = 0.98 and epsilon = 10^-9. "
-            "We varied the learning rate over the course of training, according to the formula: "
-            "lrate = d_model^(-0.5) * min(step_num^(-0.5), step_num * warmup_steps^(-1.5)). "
-            "This corresponds to increasing the learning rate linearly for the first warmup_steps training steps, "
-            "and decreasing it thereafter proportionally to the inverse square root of the step number. "
-            "We used warmup_steps = 4000 in the original Transformer architecture experiments."
-        ),
-    },
-    "GOLD-002": {
-        "section": "3 BERT Architecture",
-        "text": (
-            "3 BERT Architecture. In this work, we denote the number of layers (i.e., Transformer blocks) as L, "
-            "the hidden size as H, and the number of self-attention heads as A. We report results on two model sizes: "
-            "BERT-Base: L=12, H=768, A=12, Total Parameters=110M and BERT-Large: L=24, H=1024, A=16, Total Parameters=340M. "
-            "The pretraining context window length is 512 tokens with hidden dimension 768."
-        ),
-    },
-    "GOLD-003": {
-        "section": "Table 2 Model Architecture Parameters",
-        "text": (
-            "Table 2 summarizes the Transformer model architecture parameters. The Transformer-Base model has 6 encoder "
-            "and 6 decoder layers, 512 hidden dimension, 8 attention heads, and 65M parameters in total."
-        ),
-    },
-    "GOLD-004": {
-        "section": "3 BERT Architecture and Parameters",
-        "text": (
-            "3 Architecture Parameters. We compare model capacity across scales. In our experiments, "
-            "BERT-Large: 340M parameters across 24 layers with 1024 hidden size, substantially exceeding Transformer-Base capacity."
-        ),
-    },
-    "GOLD-005": {
-        "section": "5.1 Effect of Pre-training Tasks",
-        "text": (
-            "5.1 Effect of Pre-training Tasks. In Table 5, we present pretraining task ablations. "
-            "We observe that removing NSP hurts performance on MNLI significantly, dropping downstream accuracy from 84.4 to 82.8."
-        ),
-    },
-    "GOLD-006": {
-        "section": "4.1 Next Sentence Prediction Ablation",
-        "text": (
-            "4.1 Next Sentence Prediction. When training with contiguous full-sentences across documents, our ablation demonstrates that "
-            "removing the NSP loss matches or slightly improves downstream task performance on MNLI, SQuAD, and SST-2."
-        ),
-    },
-    "GOLD-007": {
-        "section": "6.1 Machine Translation Results",
-        "text": (
-            "6.1 Machine Translation Results. On the WMT 2014 English-to-German translation task, the big transformer model achieves "
-            "28.4 BLEU on the WMT 2014 English-to-German benchmark, setting a new state of the art."
-        ),
-    },
-    "GOLD-008": {
-        "section": "2 FlashAttention Mechanism",
-        "text": (
-            "2 FlashAttention Mechanism. FlashAttention computes exact attention but with different intermediate float accumulation in SRAM, "
-            "yielding identical mathematical attention while preventing memory reads and writes to HBM."
-        ),
-    },
-    "GOLD-009": {
-        "section": "3.1 Pre-training Details and Infrastructure",
-        "text": (
-            "3.1 Pre-training Infrastructure. Training BERT-Large was carried out for 4 days on 4 to 16 Cloud TPUs. "
-            "The paper details training time and hardware, but total electrical energy consumption in megawatt-hours was not monitored."
-        ),
-    },
-    "GOLD-010": {
-        "section": "3.1 Masked LM Task",
-        "text": (
-            "3.1 Masked LM Pretraining. We mask 15% of all tokens in each sequence at random across all training inputs. "
-            "Of the chosen token positions, 80% are replaced with [MASK], 10% are replaced with a random token, and 10% remain unchanged."
-        ),
-    },
-}
-
-
 def ensure_eval_corpus(gold_by_q: Dict[str, List[GoldEvidence]]) -> List[Chunk]:
     """
-    Ensure an indexed corpus exists.
-    Combines stored chunks from storage (e.g. ingested arXiv papers) with benchmark
-    passages corresponding to gold evidence so that retrieval evaluation covers both
-    target evidence and real-world distractor passages.
+    Ensure an indexed corpus exists from stored documents.
+    Loads real documents and chunks from storage. If no chunks exist in storage,
+    parses available PDFs in data/ (e.g. data/2610.32878v1.pdf) into storage.
+    Does NOT inject any planted or synthetic benchmark passages.
     """
-    corpus_chunks: List[Chunk] = []
-    seen_chunk_ids = set()
+    chunks = storage.get_all_chunks()
+    if chunks:
+        return chunks
 
-    # 1. Benchmark passage chunks with realistic context around gold spans
-    chunk_counter = 1
-    for qid, gold_list in gold_by_q.items():
-        for g in gold_list:
-            passage_info = BENCHMARK_PASSAGES.get(g.gold_id)
-            if passage_info:
-                text = passage_info["text"]
-                heading = passage_info["section"]
-            else:
-                text = (
-                    f"Section context discussing experimental methodology and parameters. "
-                    f"Detailed observation: {g.answer_span}. "
-                    f"Additional analysis showing consistency with related literature."
-                )
-                heading = "Benchmark Section"
+    repo_root = Path(__file__).resolve().parents[3]
+    pdf_path = repo_root / "data" / "2610.32878v1.pdf"
+    if pdf_path.exists():
+        from backend.app.ingestion.parser import parse_pdf_bytes
 
-            cid = f"synth_{g.doc_sha256[:8]}_p{g.page}_c{chunk_counter}"
-            chunk = Chunk(
-                chunk_id=cid,
-                doc_id=f"doc_{g.doc_sha256[:12]}",
-                page=g.page,
-                section_heading=heading,
-                text=text,
-                kind=ChunkKind.TEXT,
-            )
-            corpus_chunks.append(chunk)
-            seen_chunk_ids.add(cid)
-            chunk_counter += 1
+        doc, parsed_chunks = parse_pdf_bytes(pdf_path.read_bytes(), pdf_path.name)
+        storage.save_document(doc, parsed_chunks, force_overwrite=True)
+        return parsed_chunks
 
-    # 2. Add realistic distractor chunks
-    distractors = [
-        ("doc_vaswani", 1, "We propose the Transformer, a model architecture eschewing recurrence and entirely relying on an attention mechanism."),
-        ("doc_vaswani", 2, "Recurrent models generate a sequence of hidden states, factorized along sequential steps."),
-        ("doc_devlin", 1, "Language model pre-training has shown to be effective for improving many natural language processing tasks."),
-        ("doc_devlin", 5, "In this section, we evaluate BERT on 11 diverse NLP tasks from the GLUE benchmark."),
-        ("doc_liu", 2, "We replicate BERT pretraining with dynamic masking and larger mini-batch sizes."),
-    ]
-    for d_id, page, d_text in distractors:
-        cid = f"synth_{d_id}_p{page}_c{chunk_counter}"
-        corpus_chunks.append(
-            Chunk(
-                chunk_id=cid,
-                doc_id=d_id,
-                page=page,
-                section_heading="Background",
-                text=d_text,
-                kind=ChunkKind.TEXT,
-            )
-        )
-        seen_chunk_ids.add(cid)
-        chunk_counter += 1
-
-    # 3. Add all stored document chunks (e.g. real arXiv papers) as corpus background
-    for stored_c in storage.get_all_chunks():
-        if stored_c.chunk_id not in seen_chunk_ids:
-            corpus_chunks.append(stored_c)
-            seen_chunk_ids.add(stored_c.chunk_id)
-
-    return corpus_chunks
+    return []
 
 
 def run_retrieval_eval() -> Dict[str, Any]:

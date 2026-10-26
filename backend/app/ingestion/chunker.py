@@ -13,19 +13,24 @@ MIN_MERGE_CHARS = 150
 # 2. N.N. Title (e.g. "5.1. Rank Allocation Results", "5.2. SVD-Compression Results")
 # 3. N.N.N. TITLE (e.g. "5.3.1. SCALABILITY OF LEMS")
 # 4. A. Title (e.g. "A. Extended Experimental Setup", "B. Additional Ablations")
-# 5. B.N. Title / B.N.N. TITLE (e.g. "B.1. Title", "B.7. Inference Acceleration")
+# 5. B.N. Title / B.N.N. TITLE (e.g. "B.1. Title", "B.4. Llama 3.1-70B Results", "B.5.1. BITSTACK")
 # 6. Named headings (Abstract, References, Glossary, Appendix, Supplement, Impact Statement)
 HEADING_PATTERNS = [
-    re.compile(r"^(\d+\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80})$"),
-    re.compile(r"^(\d+\.\d+\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80})$"),
-    re.compile(r"^(\d+\.\d+\.\d+\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80})$"),
-    re.compile(r"^([A-Z]\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80})$"),
-    re.compile(r"^([A-Z]\.\d+(?:\.\d+)*\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80})$"),
+    re.compile(r"^(\d{1,2}\.\s+[A-Z][A-Za-z0-9\s\-\(\)\/\,\?]{2,70})$"),
+    re.compile(r"^(\d{1,2}\.\d{1,2}\.?\s+[A-Z][A-Za-z0-9\s\-\(\)\/\.\,\?]{2,70})$"),
+    re.compile(r"^(\d{1,2}\.\d{1,2}\.\d{1,2}\.?\s+[A-Z][A-Za-z0-9\s\-\(\)\/\.\,\?]{2,70})$"),
+    re.compile(r"^([A-Z]\.\s+[A-Z][A-Za-z0-9\s\-\(\)\/\,\?]{2,70})$"),
+    re.compile(r"^([A-Z]\.\d{1,2}(?:\.\d{1,2})*\.?\s+[A-Z][A-Za-z0-9\s\-\(\)\/\.\,\?]{2,70})$"),
     re.compile(
-        r"^(abstract|references|bibliography|appendix(?:\s+[A-Z0-9\.\:\-]+.*)?|supplement(?:ary)?(?:\s+.*)?|glossary|impact\s+statement)$",
+        r"^(abstract|references|bibliography|glossary|impact\s+statement|appendix|supplement(?:ary)?(?:\s+(?:material|information))?)$",
         re.IGNORECASE,
     ),
 ]
+
+NON_HEADING_UNITS = {
+    "gb", "mb", "kb", "tb", "pb", "pm", "am", "gpu", "tpu", "ram", "vram", "cpu",
+    "sec", "ms", "ns", "hz", "ghz", "mhz", "w", "kw", "mw", "v", "db", "flops", "params",
+}
 
 REFERENCES_START_REGEX = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:references|bibliography)\b",
@@ -34,11 +39,11 @@ REFERENCES_START_REGEX = re.compile(
 
 REFERENCES_EXIT_PATTERNS = [
     re.compile(
-        r"^(?:appendix(?:\s+[A-Z0-9\.\:\-]+.*)?|supplement(?:ary)?(?:\s+.*)?|glossary)$",
+        r"^(?:appendix(?:\s+[A-Z0-9\.\:\-]+.*)?|supplement(?:ary)?(?:\s+(?:material|information))?|glossary)$",
         re.IGNORECASE,
     ),
-    re.compile(r"^(?:Appendix\s+)?(?:[A-E])(?:\.\d+)*\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80}$"),
-    re.compile(r"^(?:\d+\.?\s+[A-Z][\w\s\-\:,\(\)\/\?]{1,80})$"),
+    re.compile(r"^(?:Appendix\s+)?(?:[A-E])\.\s+[A-Z][A-Za-z0-9\s\-\(\)\/\,\?]{2,70}$"),
+    re.compile(r"^(?:Appendix\s+)?(?:[A-E])\.\d{1,2}(?:\.\d{1,2})*\.?\s+[A-Z][A-Za-z0-9\s\-\(\)\/\.\,\?]{2,70}$"),
 ]
 
 EQUATION_FRAGMENT_REGEX = re.compile(
@@ -64,23 +69,42 @@ def is_heading_line(line: str) -> Optional[str]:
     Check if a single line is a section heading.
     Detects patterns like 'N. Title', 'N.N. Title', 'N.N.N. TITLE', 'A. Title', 'B.N.N. TITLE',
     as well as named headings (Abstract, References, Glossary, etc.).
-    Excludes table/figure captions and full sentences.
+    Excludes table/figure captions, list items with explanatory text, units, and dates.
     """
     s = line.strip()
-    if not s or len(s) > 90:
+    if not s or len(s) > 85:
+        return None
+    # Exclude lines ending with hyphen (line break continuation)
+    if s.endswith("-"):
         return None
     # Never treat Table or Figure captions as section headings
     if re.match(r"^(?:table|tab\.|figure|fig\.)\s*\d+", s, re.IGNORECASE):
+        return None
+    # Exclude list items with colon followed by explanatory prose, e.g. '1. Granularity (Shape): Solving...'
+    if ":" in s:
+        parts = s.split(":", 1)
+        after_colon = parts[1].strip()
+        if after_colon:
+            words = after_colon.split()
+            # If colon is followed by prose (> 2 words or starts with lowercase word)
+            if len(words) > 2 or (words and words[0][0].islower()):
+                return None
+    # Exclude full sentences starting with numbers and conjunctions like '3. While gains are marginal...'
+    if re.match(r"^\d+\.\s+(?:while|because|although|since|if|however|therefore|moreover)\b", s, re.IGNORECASE):
         return None
 
     for pat in HEADING_PATTERNS:
         m = pat.match(s)
         if m:
             heading = m.group(1) if m.groups() else s
-            if heading.endswith((".", ":", ",")):
-                words = heading.split()
-                if len(words) > 7:
-                    continue
+            # Check unit filter for lines like '5.07 GB' or '5.00 PM, 15 March 2021'
+            title_part = re.sub(r"^(?:[A-Z0-9\.]+\s+)", "", heading).strip()
+            first_word = title_part.split()[0].lower().rstrip(".,;") if title_part.split() else ""
+            if first_word in NON_HEADING_UNITS:
+                return None
+            # Exclude lines containing dates like ', 15 March 2021'
+            if re.search(r",\s*\d{1,2}\s+[A-Za-z]+\s+\d{4}", heading):
+                return None
             return heading.strip()
     return None
 
@@ -151,6 +175,8 @@ def identify_chunk_kind(text: str, in_references: bool = False) -> ChunkKind:
     """
     Classify chunk content into text, table, figure_ref, or references.
     Tag table for caption-plus-data (numeric-token density > 50%), NOT for chunks containing '|'.
+    Tag figure_ref only for standalone figure captions/references (short, <= 350 chars with caption punctuation).
+    Body paragraphs discussing results are always tagged text.
     """
     if in_references:
         return ChunkKind.REFERENCES
@@ -168,7 +194,9 @@ def identify_chunk_kind(text: str, in_references: bool = False) -> ChunkKind:
     if has_table_caption and (density > 0.50 or body_density >= 0.50):
         return ChunkKind.TABLE
 
-    if re.search(r"^\s*(?:figure\s*\d+|fig\.\s*\d+)", text, re.IGNORECASE):
+    # Standalone figure caption requires punctuation ('Figure N:' or 'Figure N.') and short length (<= 350 chars)
+    is_fig_caption = bool(re.match(r"^\s*(?:figure|fig\.)\s*\d+[:.]\s+", text, re.IGNORECASE))
+    if is_fig_caption and len(text.strip()) <= 350:
         return ChunkKind.FIGURE_REF
 
     return ChunkKind.TEXT
@@ -234,6 +262,7 @@ def split_blocks_by_headings(blocks: List[str]) -> List[Tuple[str, Optional[str]
     """
     Inspect blocks per line. If a heading line occurs inside a block,
     split the block so the heading line starts a new block unit.
+    Also stitches 2-line wrapped heading titles (e.g. '4.2. Global Rank Allocation...\nModeling (LEMS)').
     Returns list of (sub_block_text, new_heading_or_None).
     """
     units: List[Tuple[str, Optional[str]]] = []
@@ -241,16 +270,26 @@ def split_blocks_by_headings(blocks: List[str]) -> List[Tuple[str, Optional[str]
     for block in blocks:
         lines = block.splitlines()
         current_lines: List[str] = []
-
-        for line in lines:
+        idx = 0
+        while idx < len(lines):
+            line = lines[idx]
             heading = is_heading_line(line)
             if heading:
+                # Check if next line is a continuation of this heading in the same block
+                if idx + 1 < len(lines):
+                    next_line = lines[idx + 1].strip()
+                    if next_line and len(next_line) < 40 and not is_heading_line(next_line):
+                        if next_line[0].isupper() or next_line.startswith("("):
+                            heading = f"{heading} {next_line}"
+                            line = f"{line} {next_line}"
+                            idx += 1
                 if current_lines:
                     units.append(("\n".join(current_lines).strip(), None))
                     current_lines = []
-                units.append((heading, heading))
+                units.append((line, heading))
             else:
                 current_lines.append(line)
+            idx += 1
 
         if current_lines:
             units.append(("\n".join(current_lines).strip(), None))
@@ -412,6 +451,8 @@ def chunk_page_blocks(
                 flush_buffer()
                 active_section = "References"
                 active_in_refs = True
+                text_buffer.append(text)
+                buffer_len += len(text)
                 continue
 
             # If already in references mode, check if this is an exit heading
@@ -420,15 +461,19 @@ def chunk_page_blocks(
                     flush_buffer()
                     active_in_refs = False
                     active_section = heading_detected
+                    text_buffer.append(text)
+                    buffer_len += len(text)
                 else:
                     # Author entry inside bibliography (e.g. 'R. Title'); treat as regular bibliography text
                     text_buffer.append(heading_detected)
                     buffer_len += len(heading_detected)
                 continue
 
-            # Regular section transition
+            # Regular section transition: flush prior section buffer and start new chunk with heading line retained
             flush_buffer()
             active_section = heading_detected
+            text_buffer.append(text)
+            buffer_len += len(text)
             continue
 
         # Check for Tables (caption-plus-data with numeric-token density > 50%)
