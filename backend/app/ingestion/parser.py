@@ -48,6 +48,7 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
 
     all_chunks: List[Chunk] = []
     current_section = None
+    in_references = False
 
     for page_idx in range(page_count):
         page_num = page_idx + 1
@@ -72,11 +73,12 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
                 )
                 continue
 
-        chunks, current_section = chunk_page_blocks(
+        chunks, current_section, in_references = chunk_page_blocks(
             doc_id=doc_id,
             page=page_num,
             blocks=text_blocks,
             current_section=current_section,
+            in_references=in_references,
         )
         all_chunks.extend(chunks)
 

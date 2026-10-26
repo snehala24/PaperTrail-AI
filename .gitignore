@@ -51,8 +51,9 @@ htmlcov/
 
 # PDFs and Sensitive Datasets (Rule: do not commit full copyrighted PDFs)
 *.pdf
-data/pdfs/
-data/raw/
+data/
+
+
 
 # Frontend (Next.js)
 frontend/node_modules/
