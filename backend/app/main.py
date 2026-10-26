@@ -11,10 +11,10 @@ app = FastAPI(
     description="Multi-Paper Research Evidence Workspace with Claim-to-Evidence Ledger.",
 )
 
-# CORS middleware for Next.js frontend communication
+# CORS middleware for Next.js frontend communication (from ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

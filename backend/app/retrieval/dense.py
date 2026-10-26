@@ -1,13 +1,7 @@
 import os
-
-# Set OpenMP and Hugging Face offline environment variables before importing C-extensions
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-
+from typing import List, Optional, Tuple
 import faiss
 import numpy as np
-from typing import List, Optional, Tuple
 from backend.app.schemas import Chunk
 
 

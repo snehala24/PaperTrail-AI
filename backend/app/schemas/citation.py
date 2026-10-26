@@ -22,7 +22,7 @@ class CitationCheck(BaseModel):
 
     @model_validator(mode="after")
     def validate_support_requires_existence(self) -> "CitationCheck":
-        # If the chunk does not exist, it cannot support the claim
-        if not self.exists and self.supports is True:
-            raise ValueError("Citation cannot support a claim if the chunk does not exist in the corpus (exists=False).")
+        # When exists is False, supports must be None (cannot be True or False)
+        if not self.exists and self.supports is not None:
+            raise ValueError("Citation support must be None if the chunk does not exist in the corpus (exists=False).")
         return self

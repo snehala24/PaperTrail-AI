@@ -15,9 +15,6 @@ class CrossEncoderReranker:
     @property
     def model(self):
         if self._model is None:
-            os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
             from sentence_transformers import CrossEncoder
 
             self._model = CrossEncoder(self.model_name)

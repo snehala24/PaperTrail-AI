@@ -15,13 +15,16 @@ class DummyUploadFile:
         self.filename = filename
         self.content_type = content_type
         self._content = content
+        self.file = io.BytesIO(content)
 
-    async def read(self) -> bytes:
+    def read(self) -> bytes:
         return self._content
 
 
 def run_sync(coro):
-    """Run a simple async coroutine to completion synchronously without an OS event loop."""
+    """Run a coroutine or return synchronous result directly."""
+    if not hasattr(coro, "send"):
+        return coro
     try:
         val = None
         while True:
@@ -129,7 +132,7 @@ def test_post_documents_corrupted_pdf():
 
 def test_get_document_chunks_not_found():
     with pytest.raises(HTTPException) as exc_info:
-        run_sync(get_document_chunks("non-existent-doc-id-12345"))
+        run_sync(get_document_chunks("doc_000000000000"))
     assert exc_info.value.status_code == 404
     assert "not found" in exc_info.value.detail
 
