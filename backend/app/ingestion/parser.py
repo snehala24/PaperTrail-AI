@@ -101,11 +101,12 @@ def clean_page_blocks(
     raw_blocks: List[Tuple],
     running_headers: Set[str],
     page_idx: int = 1,
+    page_height: float = 792.0,
 ) -> List[str]:
     """
     Clean extracted text blocks for a page:
     - Drops running headers on pages 2+ (preserves paper title on page 1).
-    - Drops standalone page numbers (lines matching ^\\d+$).
+    - Drops standalone page numbers (lines matching ^\\d+$) only in top/bottom ~8% margin.
     - Drops rotated arXiv sidebar watermark stamp without deleting bibliography citation lines.
     - Drops isolated equation noise (| {z }, Shape, Scale).
     - Dehyphenates line-break hyphens ('pow-\\nerful' -> 'powerful').
@@ -119,6 +120,10 @@ def clean_page_blocks(
         if not text:
             continue
 
+        y0 = b[1] if len(b) > 3 else 0.0
+        y1 = b[3] if len(b) > 3 else page_height
+        is_header_footer_area = (y1 <= 0.12 * page_height) or (y0 >= 0.88 * page_height)
+
         lines = text.splitlines()
         valid_lines: List[str] = []
         for line in lines:
@@ -128,8 +133,8 @@ def clean_page_blocks(
             # Drop running headers on page 2+ (never drop document title on page 1)
             if page_idx > 0 and s in running_headers:
                 continue
-            # Drop standalone page numbers
-            if re.match(r"^\d+$", s):
+            # Drop standalone page numbers only if located in header/footer margin
+            if re.match(r"^\d+$", s) and is_header_footer_area:
                 continue
             # Drop rotated arXiv sidebar watermark (preserving inline/bibliography arXiv citations)
             if ARXIV_SIDEBAR_REGEX.match(s):
@@ -231,7 +236,10 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
             if has_image:
                 image_pages.add(page_num)
 
-            text_blocks = clean_page_blocks(raw_blocks, running_headers, page_idx=page_idx)
+            page_height = getattr(page.rect, "height", 792.0)
+            text_blocks = clean_page_blocks(
+                raw_blocks, running_headers, page_idx=page_idx, page_height=page_height
+            )
 
             if not text_blocks:
                 plain_text = page.get_text("text").strip()

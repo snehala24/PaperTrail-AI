@@ -2,13 +2,15 @@ from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
-CHUNKER_VERSION: str = "0.2.1"
+CHUNKER_VERSION: str = "0.2.2"
 
 
 class ChunkKind(str, Enum):
     TEXT = "text"
     TABLE = "table"
     FIGURE_REF = "figure_ref"
+    FIGURE_TEXT = "figure_text"
+    FOOTNOTE = "footnote"
     REFERENCES = "references"
 
 

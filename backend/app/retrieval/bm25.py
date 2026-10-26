@@ -23,8 +23,10 @@ class BM25Index:
             self.bm25 = None
             return
 
+        from backend.app.ingestion.chunker import chunk_index_text
+
         tokenized_corpus = [
-            tokenize(f"{c.section_heading or ''}\n{c.text}".strip())
+            tokenize(chunk_index_text(c))
             for c in self.chunks
         ]
         # Guard against empty corpus or corpus without alphanumeric tokens

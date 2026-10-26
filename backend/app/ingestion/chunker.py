@@ -47,7 +47,7 @@ REFERENCES_EXIT_PATTERNS = [
 ]
 
 EQUATION_FRAGMENT_REGEX = re.compile(
-    r"^(?:\|\s*\{?\s*z\s*\}?|shape|scale|bias|\|\s*\\?underbrace.*|\b[a-z]\s*\(c\)\s*=\s*[a-z]\s*\(c\).*|\(\d+\))$",
+    r"^(?:\|\s*\{?\s*z\s*\}?|shape|scale|bias|\|\s*\\?underbrace.*|\b[a-z]\s*\(c\)\s*=\s*[a-z]\s*\(c\).*)$",
     re.IGNORECASE,
 )
 
@@ -299,7 +299,8 @@ def split_blocks_by_headings(blocks: List[str]) -> List[Tuple[str, Optional[str]
 
 def merge_small_chunks(chunks: List[Chunk], min_chars: int = MIN_MERGE_CHARS) -> List[Chunk]:
     """
-    Merge chunks under min_chars into a neighbor chunk on the same page.
+    Merge chunks under min_chars into a neighbor text chunk on the same page and section.
+    Preserves figure_ref and table chunks isolated so they never absorb body prose.
     Filters out standalone equation fragments and noise.
     """
     if not chunks:
@@ -319,18 +320,40 @@ def merge_small_chunks(chunks: List[Chunk], min_chars: int = MIN_MERGE_CHARS) ->
     i = 0
     while i < len(cleaned):
         c = cleaned[i]
+        # Never merge table or figure_ref chunks into neighbors or absorb into them
+        if c.kind in (ChunkKind.FIGURE_REF, ChunkKind.TABLE):
+            merged.append(c)
+            i += 1
+            continue
+
         if len(c.text.strip()) < min_chars:
-            if merged and merged[-1].page == c.page and merged[-1].section_heading == c.section_heading:
-                prev = merged[-1]
-                prev.text = f"{prev.text}\n\n{c.text}".strip()
+            # Only merge into previous if prev has same page, same section, and is TEXT
+            if (
+                merged
+                and merged[-1].page == c.page
+                and merged[-1].section_heading == c.section_heading
+                and merged[-1].kind == ChunkKind.TEXT
+            ):
+                merged[-1].text = f"{merged[-1].text}\n\n{c.text}".strip()
                 i += 1
                 continue
-            elif i + 1 < len(cleaned) and cleaned[i + 1].page == c.page:
+            # Or merge into next if next has same page, same section, and is TEXT
+            elif (
+                i + 1 < len(cleaned)
+                and cleaned[i + 1].page == c.page
+                and cleaned[i + 1].section_heading == c.section_heading
+                and cleaned[i + 1].kind == ChunkKind.TEXT
+            ):
                 nxt = cleaned[i + 1]
                 nxt.text = f"{c.text}\n\n{nxt.text}".strip()
                 i += 1
                 continue
-            elif merged and merged[-1].page == c.page:
+            # Fallback: merge into prev on same page if prev is TEXT
+            elif (
+                merged
+                and merged[-1].page == c.page
+                and merged[-1].kind == ChunkKind.TEXT
+            ):
                 merged[-1].text = f"{merged[-1].text}\n\n{c.text}".strip()
                 i += 1
                 continue
@@ -526,4 +549,28 @@ def chunk_page_blocks(
     # 3. Merge chunks under 150 characters into neighbor chunks
     post_merged_chunks = merge_small_chunks(chunks, min_chars=MIN_MERGE_CHARS)
 
-    return post_merged_chunks, active_section, active_in_refs
+    # 4. Re-number chunks sequentially so chunk IDs per page are strictly gapless (c1, c2, c3...)
+    renumbered_chunks: List[Chunk] = []
+    for idx, c in enumerate(post_merged_chunks, start=start_chunk_idx):
+        c.chunk_id = f"{doc_id}_p{page}_c{idx}"
+        renumbered_chunks.append(c)
+
+    return renumbered_chunks, active_section, active_in_refs
+
+
+def chunk_index_text(chunk: Chunk) -> str:
+    """
+    Format section heading and chunk text for indexing and retrieval
+    without duplicating the heading if it is already present at the start of text.
+    """
+    text = chunk.text.strip()
+    heading = (chunk.section_heading or "").strip()
+    if not heading:
+        return text
+
+    # Check if the text already begins with the heading
+    first_line = text.split("\n", 1)[0].strip()
+    if first_line.lower() == heading.lower() or text.lower().startswith(heading.lower()):
+        return text
+
+    return f"{heading}\n{text}"

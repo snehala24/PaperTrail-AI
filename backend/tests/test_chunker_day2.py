@@ -264,3 +264,125 @@ def test_reingest_chunker_version(tmp_path):
     loaded_chunks = store.get_chunks("doc_old")
     assert len(loaded_chunks) == 2
     assert loaded_chunks[0].text == "New merged chunk text"
+
+
+def test_chunker_v022_equation_numbers_survive():
+    """C1: Standalone equation numbers like (15) are NOT treated as equation fragments."""
+    assert is_equation_fragment("(15)") is False
+    assert is_equation_fragment("(1)") is False
+    assert is_equation_fragment("| {z }") is True
+    assert is_equation_fragment("Shape") is True
+
+
+def test_page_number_noise_margin():
+    """C2: Drop bare digit-only lines only in top/bottom ~8% margin of page."""
+    # Top margin (y1 <= 0.08 * 800 = 64) -> dropped
+    top_block = [(50, 20, 100, 35, "14", 0, 0)]
+    cleaned_top = clean_page_blocks(top_block, running_headers=set(), page_idx=2, page_height=800.0)
+    assert cleaned_top == []
+
+    # Bottom margin (y0 >= 0.92 * 800 = 736) -> dropped
+    bottom_block = [(50, 750, 100, 770, "14", 0, 0)]
+    cleaned_bottom = clean_page_blocks(bottom_block, running_headers=set(), page_idx=2, page_height=800.0)
+    assert cleaned_bottom == []
+
+    # Middle of page (y0=300, y1=320) -> kept
+    mid_block = [(50, 300, 100, 320, "14", 0, 0)]
+    cleaned_mid = clean_page_blocks(mid_block, running_headers=set(), page_idx=2, page_height=800.0)
+    assert cleaned_mid == ["14"]
+
+
+def test_caption_isolation_never_merges_body_prose():
+    """C3: When a caption ends, do NOT merge following body prose into the caption chunk."""
+    fig_chunk = Chunk(
+        chunk_id="doc_p1_c1",
+        doc_id="doc",
+        page=1,
+        text="Figure 1: Architecture diagram showing memory hierarchy.",
+        kind=ChunkKind.FIGURE_REF,
+    )
+    small_prose_chunk = Chunk(
+        chunk_id="doc_p1_c2",
+        doc_id="doc",
+        page=1,
+        text="This is a short body paragraph.",
+        kind=ChunkKind.TEXT,
+    )
+    merged = merge_small_chunks([fig_chunk, small_prose_chunk], min_chars=150)
+    # Figure chunk must remain isolated and not merge with body prose
+    assert len(merged) == 2
+    assert merged[0].kind == ChunkKind.FIGURE_REF
+    assert merged[1].kind == ChunkKind.TEXT
+    assert "body paragraph" not in merged[0].text
+
+
+def test_gapless_chunk_ids_after_merging():
+    """C5: Sequential 1-based chunk IDs per page are strictly gapless (c1, c2, c3...)."""
+    doc_id = "doc_gapless"
+    blocks = [
+        "1. Introduction\nFirst section lead paragraph with comprehensive details about method." * 4,
+        "Figure 1: Isolated figure diagram caption with overview.",
+        "Short paragraph that merges into previous text chunk.",
+        "Table 1: Benchmark results\n10 20 30 40 50 60 70 80 90 100",
+    ]
+    chunks, _, _ = chunk_page_blocks(doc_id, page=7, blocks=blocks, current_section="1. Introduction")
+    chunk_numbers = [int(c.chunk_id.split("_c")[-1]) for c in chunks]
+    expected_numbers = list(range(1, len(chunks) + 1))
+    assert chunk_numbers == expected_numbers
+
+
+def test_chunk_index_text_helper():
+    """C6: chunk_index_text formats section + text without duplicating leading headings."""
+    from backend.app.ingestion.chunker import chunk_index_text
+
+    # Heading not in text -> prepend
+    c1 = Chunk(
+        chunk_id="c1",
+        doc_id="d1",
+        page=1,
+        section_heading="2. Methodology",
+        text="We propose an optimization algorithm.",
+        kind=ChunkKind.TEXT,
+    )
+    assert chunk_index_text(c1) == "2. Methodology\nWe propose an optimization algorithm."
+
+    # Heading already at start of text -> do not duplicate
+    c2 = Chunk(
+        chunk_id="c2",
+        doc_id="d1",
+        page=1,
+        section_heading="2. Methodology",
+        text="2. Methodology\nWe propose an optimization algorithm.",
+        kind=ChunkKind.TEXT,
+    )
+    assert chunk_index_text(c2) == "2. Methodology\nWe propose an optimization algorithm."
+
+
+def test_real_paper_verification_c8():
+    """C8: Real paper verification on data/2610.32878v1.pdf."""
+    from pathlib import Path
+    pdf_path = Path("data/2610.32878v1.pdf")
+    if not pdf_path.exists():
+        pytest.skip("Real paper data/2610.32878v1.pdf not present")
+
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    doc, chunks = parse_pdf_bytes(pdf_bytes, "2610.32878v1.pdf")
+    # Total chunks in [80, 200]
+    assert 80 <= len(chunks) <= 200
+    # References chunks only on pages 9-11
+    ref_pages = sorted(list(set(c.page for c in chunks if c.kind == ChunkKind.REFERENCES)))
+    assert ref_pages == [9, 10, 11]
+    # No figure_ref chunk > 700 chars
+    assert all(len(c.text) <= 700 for c in chunks if c.kind == ChunkKind.FIGURE_REF)
+    # (15) appears in page-5 chunk text
+    p5_text = "\n".join([c.text for c in chunks if c.page == 5])
+    assert "(15)" in p5_text
+    # Chunk IDs are contiguous per page
+    page_chunks = {}
+    for c in chunks:
+        page_chunks.setdefault(c.page, []).append(int(c.chunk_id.split("_c")[-1]))
+    for p, ids in page_chunks.items():
+        assert ids == list(range(1, len(ids) + 1))
+

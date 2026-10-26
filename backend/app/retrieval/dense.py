@@ -34,7 +34,9 @@ class DenseIndex:
             self.index = None
             return
 
-        texts = [f"{c.section_heading or ''}\n{c.text}".strip() for c in self.chunks]
+        from backend.app.ingestion.chunker import chunk_index_text
+
+        texts = [chunk_index_text(c) for c in self.chunks]
         embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
         faiss.normalize_L2(embeddings)

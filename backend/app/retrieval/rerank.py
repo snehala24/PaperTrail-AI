@@ -30,7 +30,9 @@ class CrossEncoderReranker:
         if not candidates:
             return []
 
-        pairs = [[query, f"{c.section_heading or ''}\n{c.text}".strip()] for c in candidates]
+        from backend.app.ingestion.chunker import chunk_index_text
+
+        pairs = [[query, chunk_index_text(c)] for c in candidates]
         scores = self.model.predict(pairs, show_progress_bar=False)
 
         scored_candidates = list(zip(candidates, scores))
