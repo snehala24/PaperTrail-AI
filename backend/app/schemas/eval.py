@@ -15,7 +15,9 @@ class BenchmarkQuestionType(str, Enum):
 
 class BenchmarkStatus(str, Enum):
     DRAFT = "draft"
+    AI_DRAFT = "ai_draft"
     VERIFIED = "verified"
+    HUMAN_VERIFIED = "human_verified"
 
 
 class BenchmarkQuestion(BaseModel):
@@ -23,10 +25,15 @@ class BenchmarkQuestion(BaseModel):
     question_id: str = Field(..., description="Unique question identifier")
     question: str = Field(..., min_length=5, description="Benchmark query text")
     question_type: BenchmarkQuestionType = Field(..., description="Query category")
-    status: BenchmarkStatus = Field(default=BenchmarkStatus.DRAFT, description="Annotation status")
+    status: BenchmarkStatus = Field(default=BenchmarkStatus.AI_DRAFT, description="Annotation status")
+    labelled_by: Optional[str] = Field(default="assistant", description="Provenance of annotation (e.g. assistant, human)")
     target_doc_ids: List[str] = Field(
         default_factory=list,
         description="List of expected document IDs containing answers or evidence"
+    )
+    gold_chunk_ids: Optional[List[str]] = Field(
+        default_factory=list,
+        description="Optional list of explicit gold chunk IDs spanning one or multiple documents"
     )
     notes: Optional[str] = Field(default="", description="Annotator notes or instructions")
 
@@ -43,7 +50,12 @@ class GoldEvidence(BaseModel):
     page: int = Field(..., ge=1, description="1-indexed page number containing the evidence")
     answer_span: str = Field(..., min_length=1, description="Exact or normalized text span of the evidence")
     expected_relation: EvidenceRelation = Field(default=EvidenceRelation.SUPPORTS, description="Expected relation type")
-    status: BenchmarkStatus = Field(default=BenchmarkStatus.DRAFT, description="Annotation status")
+    status: BenchmarkStatus = Field(default=BenchmarkStatus.AI_DRAFT, description="Annotation status")
+    labelled_by: Optional[str] = Field(default="assistant", description="Provenance of annotation")
+    gold_chunk_ids: Optional[List[str]] = Field(
+        default_factory=list,
+        description="Optional list of explicit gold chunk IDs for multi-doc evaluation"
+    )
     conflict_reason: Optional[str] = Field(
         default=None,
         description="Reason for apparent conflict if relation is contradicts or weakens"

@@ -82,3 +82,46 @@ def test_compute_retrieval_metrics_rank2_hit():
     assert metrics["mrr"] == 0.5  # 1 / rank 2
     assert metrics["ndcg@1"] == 0.0
     assert metrics["ndcg@2"] > 0.0
+
+
+def test_compute_retrieval_metrics_empty_gold_raises():
+    """Unanswerable questions without gold evidence must raise ValueError, not return invented metrics."""
+    with pytest.raises(ValueError) as exc:
+        compute_retrieval_metrics([], [])
+    assert "Cannot compute retrieval metrics for question with no gold evidence" in str(exc.value)
+
+
+def test_bootstrap_ci_95():
+    """95% bootstrap CI produces valid bounds within data range."""
+    from backend.app.eval.metrics import bootstrap_ci_95
+
+    # Uniform values
+    ci_constant = bootstrap_ci_95([1.0, 1.0, 1.0])
+    assert ci_constant == (1.0, 1.0)
+
+    # Mixed values
+    vals = [1.0, 1.0, 0.0, 1.0, 0.5, 1.0, 1.0, 0.0]
+    lower, upper = bootstrap_ci_95(vals, n_resamples=1000)
+    assert 0.0 <= lower <= upper <= 1.0
+    assert lower > 0.2
+    assert upper < 1.0
+
+
+def test_multi_doc_gold_matching():
+    """Multi-doc queries with explicit gold_chunk_ids match accurately across documents."""
+    gold = [
+        GoldEvidence(
+            gold_id="g_multi",
+            question_id="q_multi",
+            doc_sha256="any_sha",
+            page=1,
+            answer_span="cross-paper concept",
+            gold_chunk_ids=["doc1_p1_c1", "doc2_p3_c5"],
+        )
+    ]
+    retrieved = [
+        Chunk(chunk_id="doc2_p3_c5", doc_id="doc2", page=3, text="Independent paper text.", kind=ChunkKind.TEXT)
+    ]
+    metrics = compute_retrieval_metrics(retrieved, gold, k_list=[1])
+    assert metrics["recall@1"] == 1.0
+    assert metrics["mrr"] == 1.0

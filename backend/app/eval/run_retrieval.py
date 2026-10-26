@@ -4,6 +4,11 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
+
+# Offline flags for fast local evaluation without HF hub lookups
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 from backend.app.schemas import (
     BenchmarkQuestion,
     GoldEvidence,
@@ -15,7 +20,7 @@ from backend.app.retrieval.bm25 import BM25Index
 from backend.app.retrieval.dense import DenseIndex
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.rerank import CrossEncoderReranker
-from backend.app.eval.metrics import compute_retrieval_metrics
+from backend.app.eval.metrics import compute_retrieval_metrics, bootstrap_ci_95
 
 
 def get_git_commit() -> str:
@@ -73,7 +78,13 @@ def ensure_eval_corpus(gold_by_q: Dict[str, List[GoldEvidence]]) -> List[Chunk]:
 
 
 def run_retrieval_eval() -> Dict[str, Any]:
-    """Execute evaluation across the 4 configurations and record timestamped run log."""
+    """
+    Execute evaluation across the 4 configurations and record timestamped run log.
+    - Evaluates retrieval metrics ONLY on answerable questions with gold evidence.
+    - Reserves unanswerable questions for Day 3 honest abstention.
+    - Calculates 95% bootstrap confidence intervals for Recall@5 and MRR (1000 resamples).
+    - Emits statistical power warning when n < 30.
+    """
     repo_root = Path(__file__).resolve().parents[3]
     eval_dir = repo_root / "eval"
     runs_dir = eval_dir / "runs"
@@ -92,16 +103,26 @@ def run_retrieval_eval() -> Dict[str, Any]:
     reranker = CrossEncoderReranker()
     chunk_map = {c.chunk_id: c for c in chunks}
 
+    # Partition into answerable and unanswerable questions
+    answerable_questions: List[BenchmarkQuestion] = [
+        q for q in questions
+        if q.question_type != "unanswerable" and len(gold_by_q.get(q.question_id, [])) > 0
+    ]
+    unanswerable_questions: List[BenchmarkQuestion] = [
+        q for q in questions if q not in answerable_questions
+    ]
+
     configs = ["bm25", "dense", "hybrid_rrf", "hybrid_rerank"]
     results_by_config: Dict[str, Dict[str, float]] = {c: {} for c in configs}
+    ci_by_config: Dict[str, Dict[str, Tuple[float, float]]] = {c: {} for c in configs}
     breakdown_by_type: Dict[str, Dict[str, Dict[str, float]]] = {}
 
     k_list = [1, 3, 5, 10]
     all_q_metrics: Dict[str, List[Dict[str, float]]] = {c: [] for c in configs}
     q_type_metrics: Dict[str, Dict[str, List[Dict[str, float]]]] = {}
 
-    for q in questions:
-        q_type = q.question_type.value
+    for q in answerable_questions:
+        q_type = q.question_type.value if hasattr(q.question_type, "value") else str(q.question_type)
         gold_items = gold_by_q.get(q.question_id, [])
 
         # 1. BM25 Search
@@ -144,17 +165,29 @@ def run_retrieval_eval() -> Dict[str, Any]:
 
     for cfg in configs:
         results_by_config[cfg] = avg_metrics(all_q_metrics[cfg])
+        rec5_vals = [m.get("recall@5", 0.0) for m in all_q_metrics[cfg]]
+        mrr_vals = [m.get("mrr", 0.0) for m in all_q_metrics[cfg]]
+        ci_by_config[cfg] = {
+            "recall@5_ci95": bootstrap_ci_95(rec5_vals, n_resamples=1000),
+            "mrr_ci95": bootstrap_ci_95(mrr_vals, n_resamples=1000),
+        }
 
     for q_type, cfg_dict in q_type_metrics.items():
         breakdown_by_type[q_type] = {}
         for cfg, m_list in cfg_dict.items():
             breakdown_by_type[q_type][cfg] = avg_metrics(m_list)
 
+    n_eval = len(answerable_questions)
+    warning_msg = None
+    if n_eval < 30:
+        warning_msg = f"Sample size (n={n_eval}) too small for statistical significance (n < 30)."
+
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_record: Dict[str, Any] = {
         "run_id": f"run_{timestamp_str}",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "git_commit": get_git_commit(),
+        "benchmark_provenance": "ai_draft",
         "models": {
             "embedding_model": dense.model_name,
             "reranker_model": reranker.model_name,
@@ -164,9 +197,13 @@ def run_retrieval_eval() -> Dict[str, Any]:
             "max_chars": 1500,
             "max_table_chars": 2500,
         },
-        "total_questions_evaluated": len(questions),
+        "total_questions": len(questions),
+        "answerable_questions_evaluated": n_eval,
+        "unanswerable_questions_reserved": len(unanswerable_questions),
+        "statistical_warning": warning_msg,
         "total_corpus_chunks": len(chunks),
         "overall_metrics_by_config": results_by_config,
+        "confidence_intervals_95": ci_by_config,
         "breakdown_by_question_type": breakdown_by_type,
     }
 
@@ -185,14 +222,23 @@ def main():
     record = run_retrieval_eval()
     print(f"\nRun ID: {record['run_id']}")
     print(f"Commit: {record['git_commit']}")
-    print(f"Questions Evaluated: {record['total_questions_evaluated']}")
+    print(f"Total Questions: {record['total_questions']}")
+    print(f"Answerable Evaluated: {record['answerable_questions_evaluated']}")
+    print(f"Unanswerable Reserved (Day 3 Abstention): {record['unanswerable_questions_reserved']}")
     print(f"Corpus Chunks: {record['total_corpus_chunks']}")
+
+    if record.get("statistical_warning"):
+        print(f"\n>>> WARNING: {record['statistical_warning']} <<<")
+
     print("\n--- Overall Metrics by Configuration ---")
-    header = f"{'Config':<16} | {'Recall@1':<9} | {'Recall@5':<9} | {'MRR':<8} | {'nDCG@5':<8}"
+    header = f"{'Config':<16} | {'Recall@1':<9} | {'Recall@5 (95% CI)':<22} | {'MRR (95% CI)':<20} | {'nDCG@5':<8}"
     print(header)
     print("-" * len(header))
     for cfg, m in record["overall_metrics_by_config"].items():
-        print(f"{cfg:<16} | {m.get('recall@1', 0.0):<9.4f} | {m.get('recall@5', 0.0):<9.4f} | {m.get('mrr', 0.0):<8.4f} | {m.get('ndcg@5', 0.0):<8.4f}")
+        ci = record["confidence_intervals_95"].get(cfg, {})
+        rec5_str = f"{m.get('recall@5', 0.0):.4f} {ci.get('recall@5_ci95', (0,0))}"
+        mrr_str = f"{m.get('mrr', 0.0):.4f} {ci.get('mrr_ci95', (0,0))}"
+        print(f"{cfg:<16} | {m.get('recall@1', 0.0):<9.4f} | {rec5_str:<22} | {mrr_str:<20} | {m.get('ndcg@5', 0.0):<8.4f}")
 
     print("\n--- Breakdown by Question Type (nDCG@5) ---")
     for q_type, cfg_data in record["breakdown_by_question_type"].items():
