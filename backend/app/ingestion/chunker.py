@@ -202,9 +202,60 @@ def identify_chunk_kind(text: str, in_references: bool = False) -> ChunkKind:
     return ChunkKind.TEXT
 
 
-def dehyphenate(text: str) -> str:
-    """Join line-break hyphens ('pow-\\nerful' -> 'powerful') when next char is lowercase."""
-    return re.sub(r"(\b[a-zA-Z]+)-\s*\n\s*([a-z][a-zA-Z]*)", r"\1\2", text)
+def dehyphenate(text: str, doc_tokens_lower: Optional[Set[str]] = None) -> str:
+    """
+    Join line-break hyphens ('pow-\\nerful' -> 'powerful') only when plausible:
+    1. Preserves suspended hyphens with coordinating conjunctions ('layer-\\nand' -> 'layer- and')
+    2. Preserves multi-hyphen compounds ('mixture-\\nof-experts' -> 'mixture-of-experts')
+    3. Preserves acronym/title-case compounds ('KFAC-\\nSVD' -> 'KFAC-SVD', 'ARC-\\nChallenge' -> 'ARC-Challenge')
+    4. Joins when the combined word appears elsewhere in the document as a natural token
+    5. Preserves hyphen when both fragments are independent words in doc, and joined is not ('sequence-\\ngradient' -> 'sequence-gradient')
+    6. Joins syllable-break fragments ('pow-\\nerful' -> 'powerful', 'ap-\\nproximation' -> 'approximation')
+    """
+    if not text:
+        return ""
+
+    if doc_tokens_lower is None:
+        clean = set(re.findall(r"\b[a-zA-Z]{3,}\b(?!\s*-\s*\n)", text))
+        doc_tokens_lower = {t.lower() for t in clean}
+
+    def _replace(match: re.Match) -> str:
+        w1 = match.group(1)
+        w2 = match.group(2)
+
+        # 1. Suspended hyphen followed by coordinating conjunction ('layer-\nand' -> 'layer- and')
+        conj_match = re.match(r"^(and|or|nor|vs|to)$", w2, re.IGNORECASE)
+        if conj_match:
+            return f"{w1}- {w2}"
+
+        # 2. Multi-hyphen compound ('mixture-\nof-experts' -> 'mixture-of-experts')
+        if "-" in w2:
+            return f"{w1}-{w2}"
+
+        # 3. Uppercase acronym or title-case compound ('KFAC-\nSVD', 'ARC-\nChallenge')
+        if w1.isupper() or (len(w1) >= 2 and w1[0].isupper() and w2[0].isupper()):
+            return f"{w1}-{w2}"
+
+        joined = w1 + w2
+        joined_lower = joined.lower()
+
+        # 4. If joined word appears naturally in document: join!
+        if joined_lower in doc_tokens_lower:
+            return joined
+
+        w1_lower = w1.lower()
+        w2_lower = w2.lower()
+
+        # 5. If BOTH w1 and w2 are independent words, and joined is NOT:
+        # It is a hyphenated compound ('sequence-gradient', 'loss-aware', 'layer-output')
+        if w1_lower in doc_tokens_lower and w2_lower in doc_tokens_lower and joined_lower not in doc_tokens_lower:
+            return f"{w1}-{w2}"
+
+        # 6. Default: split syllables of a single word ('pow-erful', 'approx-imation')
+        return joined
+
+    pattern = re.compile(r"(\b[a-zA-Z]+)-\s*\n\s*([a-zA-Z]+(?:-[a-zA-Z]+)?)")
+    return pattern.sub(_replace, text)
 
 
 def merge_captions_in_blocks(blocks: List[str]) -> List[str]:

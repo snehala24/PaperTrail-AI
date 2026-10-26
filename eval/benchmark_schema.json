@@ -22,7 +22,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["draft", "ai_draft", "human_draft", "verified", "human_verified"],
+          "enum": ["draft", "ai_draft", "human_draft", "verified", "human_verified", "pending_second_paper"],
           "description": "Annotation status; starts as 'human_draft' or 'ai_draft' until verified by human annotator"
         },
         "target_doc_ids": {
@@ -68,7 +68,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["draft", "ai_draft", "human_draft", "verified", "human_verified"],
+          "enum": ["draft", "ai_draft", "human_draft", "verified", "human_verified", "pending_second_paper"],
           "description": "Annotation verification status"
         },
         "conflict_reason": {

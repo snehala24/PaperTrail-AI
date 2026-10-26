@@ -37,13 +37,17 @@ def test_eval_questions_loading():
     ai_questions = [q for q in questions if q.status == BenchmarkStatus.AI_DRAFT]
     human_questions = [
         q for q in questions
-        if q.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED)
+        if q.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED, BenchmarkStatus.PENDING_SECOND_PAPER)
     ]
     assert len(ai_questions) == 10
     assert all(q.labelled_by == "assistant" for q in ai_questions)
 
     assert len(human_questions) == 20
     assert all(q.labelled_by == "snehala24" for q in human_questions)
+
+    pending_questions = [q for q in questions if q.status == BenchmarkStatus.PENDING_SECOND_PAPER]
+    assert len(pending_questions) == 2
+    assert {q.question_id for q in pending_questions} == {"Q-029", "Q-030"}
 
     categories = {q.question_type for q in questions}
     assert BenchmarkQuestionType.FACTUAL in categories
@@ -69,13 +73,17 @@ def test_eval_gold_evidence_loading():
     ai_gold = [g for g in gold_entries if g.status == BenchmarkStatus.AI_DRAFT]
     human_gold = [
         g for g in gold_entries
-        if g.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED)
+        if g.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED, BenchmarkStatus.PENDING_SECOND_PAPER)
     ]
     assert len(ai_gold) == 10
     assert all(g.labelled_by == "assistant" for g in ai_gold)
 
     assert len(human_gold) == 24
     assert all(g.labelled_by == "snehala24" for g in human_gold)
+
+    pending_gold = [g for g in gold_entries if g.status == BenchmarkStatus.PENDING_SECOND_PAPER]
+    assert len(pending_gold) == 4
+    assert {g.gold_id for g in pending_gold} == {"GOLD-031", "GOLD-032", "GOLD-033", "GOLD-034"}
 
     for g in gold_entries:
         if not ("TODO" in g.doc_sha256 or g.answer_span.startswith("TODO")):

@@ -217,6 +217,31 @@ def test_dehyphenation_and_gold_matcher():
     assert "powerful" in dehyphed
     assert "models" in dehyphed
 
+    # Regression tests for glued-words defects:
+    # 1. Multi-hyphen compound must preserve hyphens
+    moe_raw = "vision-language models (VLMs) and mixture-\nof-experts (MoE) models."
+    moe_dehyphed = dehyphenate(moe_raw)
+    assert "mixture-of-experts" in moe_dehyphed
+    assert "mixtureof" not in moe_dehyphed
+
+    # 2. Suspended hyphen with coordinating conjunction
+    layer_raw = "it cannot capture layer-\nand type-specific importance deviations."
+    layer_dehyphed = dehyphenate(layer_raw)
+    assert "layer- and type-specific" in layer_dehyphed
+    assert "layerand" not in layer_dehyphed
+
+    # 3. Hyphenated compound modifier in context
+    seq_raw = "sequence data and gradient computation for sequence-\ngradient fitting."
+    seq_dehyphed = dehyphenate(seq_raw)
+    assert "sequence-gradient" in seq_dehyphed
+    assert "sequencegradient" not in seq_dehyphed
+
+    # 4. Acronym compound
+    kfac_raw = "addressing the KFAC-\nSVD rank bottleneck."
+    kfac_dehyphed = dehyphenate(kfac_raw)
+    assert "KFAC-SVD" in kfac_dehyphed
+    assert "KFACSVD" not in kfac_dehyphed
+
     # Span matcher with hyphens and whitespace normalization
     chunk_text = "The system delivers state-of-the-art compression with powerful latency reduction."
     gold_span_hyphen = "state‑of‑the‑art"  # Non-breaking unicode hyphen

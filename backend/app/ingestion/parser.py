@@ -102,6 +102,7 @@ def clean_page_blocks(
     running_headers: Set[str],
     page_idx: int = 1,
     page_height: float = 792.0,
+    doc_tokens_lower: Optional[Set[str]] = None,
 ) -> List[str]:
     """
     Clean extracted text blocks for a page:
@@ -109,7 +110,7 @@ def clean_page_blocks(
     - Drops standalone page numbers (lines matching ^\\d+$) only in top/bottom ~8% margin.
     - Drops rotated arXiv sidebar watermark stamp without deleting bibliography citation lines.
     - Drops isolated equation noise (| {z }, Shape, Scale).
-    - Dehyphenates line-break hyphens ('pow-\\nerful' -> 'powerful').
+    - Dehyphenates line-break hyphens ('pow-\\nerful' -> 'powerful') only when plausible.
     """
     cleaned_blocks: List[str] = []
 
@@ -151,8 +152,8 @@ def clean_page_blocks(
         if not joined_text or is_equation_fragment(joined_text):
             continue
 
-        # Dehyphenate line-break hyphens
-        dehyphenated_text = dehyphenate(joined_text)
+        # Dehyphenate line-break hyphens with document vocabulary awareness
+        dehyphenated_text = dehyphenate(joined_text, doc_tokens_lower=doc_tokens_lower)
         cleaned_blocks.append(dehyphenated_text)
 
     return cleaned_blocks
@@ -215,6 +216,20 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
     # Pre-detect running headers repeated on >= 50% of pages
     running_headers = detect_running_headers(pdf_doc, page_count)
 
+    # Pre-extract clean document tokens for vocabulary-aware dehyphenation
+    raw_blocks_list: List[str] = []
+    for page_idx in range(page_count):
+        try:
+            raw_blocks_list.extend(
+                b[4] for b in pdf_doc[page_idx].get_text("blocks")
+                if len(b) > 4 and b[6] == 0
+            )
+        except Exception:
+            pass
+    all_raw_blocks_text = " ".join(raw_blocks_list)
+    raw_clean_tokens = set(re.findall(r"\b[a-zA-Z]{3,}\b(?!\s*-\s*\n)", all_raw_blocks_text))
+    doc_tokens_lower: Set[str] = {t.lower() for t in raw_clean_tokens}
+
     all_chunks: List[Chunk] = []
     current_section = None
     in_references = False
@@ -238,13 +253,17 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
 
             page_height = getattr(page.rect, "height", 792.0)
             text_blocks = clean_page_blocks(
-                raw_blocks, running_headers, page_idx=page_idx, page_height=page_height
+                raw_blocks,
+                running_headers,
+                page_idx=page_idx,
+                page_height=page_height,
+                doc_tokens_lower=doc_tokens_lower,
             )
 
             if not text_blocks:
                 plain_text = page.get_text("text").strip()
                 if plain_text:
-                    dehyphed = dehyphenate(plain_text)
+                    dehyphed = dehyphenate(plain_text, doc_tokens_lower=doc_tokens_lower)
                     text_blocks = [dehyphed]
                 else:
                     extraction_warnings.append(

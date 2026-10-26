@@ -2,7 +2,7 @@ from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
-CHUNKER_VERSION: str = "0.2.2"
+CHUNKER_VERSION: str = "0.2.3"
 
 
 class ChunkKind(str, Enum):

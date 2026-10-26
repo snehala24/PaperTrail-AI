@@ -36,18 +36,22 @@ class HybridRetriever:
         doc_ids: Optional[List[str]] = None,
         include_references: bool = False,
         use_reranker: bool = True,
-        candidate_pool_size: int = 30,
+        candidate_pool_size: Optional[int] = None,
     ) -> List[ScoredChunk]:
         """
         Execute hybrid search:
         1. BM25 search -> top N
         2. Dense search -> top N
-        3. Reciprocal Rank Fusion (RRF) -> top candidate_pool_size
+        3. Reciprocal Rank Fusion (RRF) -> top candidate_pool_size (default from RERANK_POOL or 30)
         4. Cross-Encoder reranking -> top_k
         Filters out ChunkKind.REFERENCES by default.
         """
         if not self.chunks_by_id:
             return []
+
+        if candidate_pool_size is None:
+            import os
+            candidate_pool_size = int(os.environ.get("RERANK_POOL", "30"))
 
         doc_filter_set: Optional[Set[str]] = set(doc_ids) if doc_ids else None
 
