@@ -1,7 +1,7 @@
 import hashlib
 from typing import List
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
-from backend.app.schemas import Document, Chunk, DocumentUploadResponse
+from backend.app.schemas import Document, Chunk, DocumentUploadResponse, CHUNKER_VERSION
 from backend.app.ingestion.parser import parse_pdf_bytes, calculate_sha256
 from backend.app.core.storage import storage
 from backend.app.retrieval.hybrid import retriever
@@ -13,8 +13,11 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 async def upload_document(file: UploadFile = File(...)) -> DocumentUploadResponse:
     """
     Ingest a research paper in PDF format.
-    - Computes SHA-256 and deduplicates: re-uploading an existing PDF returns the stored document.
-    - Parses pages, merges blocks into passages (~800-1500 chars), isolates tables, tags references.
+    - Computes SHA-256 and deduplicates: re-uploading an existing PDF returns the stored document,
+      UNLESS the stored document was created with an older chunker version (in which case it re-ingests).
+    - Parses pages, drops running headers, standalone page numbers, and sidebar noise.
+    - Dehyphenates line breaks ("pow-\\nerful" -> "powerful").
+    - Merges blocks into passages (~800-1500 chars), isolates tables, tags references.
     - Persists document and chunks to data/.
     - Updates the global hybrid retrieval index.
     """
@@ -35,7 +38,7 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentUploadRespons
 
     sha256 = calculate_sha256(content)
     existing_doc = storage.get_document_by_sha256(sha256)
-    if existing_doc:
+    if existing_doc and getattr(existing_doc, "chunker_version", None) == CHUNKER_VERSION:
         existing_chunks = storage.get_chunks(existing_doc.doc_id)
         return DocumentUploadResponse(
             document=existing_doc,
@@ -50,7 +53,7 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentUploadRespons
             detail=str(exc),
         ) from exc
 
-    saved_doc = storage.save_document(document, chunks)
+    saved_doc = storage.save_document(document, chunks, force_overwrite=True)
     # Rebuild/update retrieval index with all corpus chunks
     retriever.index_chunks(storage.get_all_chunks())
 

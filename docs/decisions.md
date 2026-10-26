@@ -49,3 +49,23 @@
   1. It belongs to the designated document (matching `doc_sha256`) and page.
   2. Its text contains the `answer_span` under case-insensitive whitespace-normalized substring matching.
 - **Consequences**: The evaluation benchmark is fully invariant to chunker settings, window sizes, and passage merging algorithms. Benchmarks remain durable across future ingestion iterations.
+
+## ADR-008: Chunker Robustness, Boundary Detection, and Re-Ingestion Hygiene
+- **Status**: Accepted (2026-10-26)
+- **Context**: Inspecting real-world extraction outputs on a 34-page arXiv paper (`2610.32878v1.pdf`) revealed seven structural defects:
+  1. *Oversized References Tagging*: Everything following the `References` header (pages 14–34 appendix) was tagged as `references`, erroneously hiding 77/135 chunks from retrieval.
+  2. *Heading Detection Blindspots*: Headings appearing on subsequent lines within text blocks were missed, causing sub-section headings (e.g. `5.2`, `B.7`) to inherit previous section headers (e.g. `5.1`).
+  3. *Page Artifact Noise*: Running headers, page numbers, and rotated arXiv metadata sidebars polluted chunk texts.
+  4. *Caption and Formula Splitting*: Captions were split mid-sentence across chunks, and tiny formula fragments (`| {z }`, `Shape`, `Scale`) formed isolated chunks.
+  5. *Table False Positives*: Chunks with text pipe delimiters (`|`) were misclassified as `table`.
+  6. *Line-Break Hyphenation*: Split words (`pow-\nerful`) degraded lexical and span matching.
+  7. *Stale Chunk Serving*: SHA-256 deduplication returned stale cached chunks even when chunker logic had been improved.
+- **Decision**:
+  1. *Dual-Signal References Boundary*: Terminate references mode upon encountering top-level appendix/supplement/glossary headings or lettered sections (`A. Title`, `B.1. Title`), and validate bibliography chunks via content checks (19xx/20xx years and citations markers like `doi`, `arXiv`, `Proceedings`, `et al.`).
+  2. *Line-Aware Heading Detection*: Inspect each line for heading patterns (`N. Title`, `N.N. Title`, `A. Title`, `B.N.N. TITLE`), split blocks immediately on heading lines, and propagate section titles forward to subsequent chunks.
+  3. *Noise Pruning*: Strip lines repeated across $\ge 50\%$ of pages (running headers), standalone page numbers (`^\d+$`), and rotated arXiv sidebar text during document parsing.
+  4. *Caption Merge & Fragment Absorber*: Keep captions unified until terminal sentence punctuation. Absorb chunks $< 150$ characters into adjacent neighbors and drop isolated math notation fragments.
+  5. *Table Density Rule*: Classify chunks as `table` only when accompanied by caption context and exhibiting $> 50\%$ numeric token density (excluding delimiter characters).
+  6. *Dehyphenation & Normalized Matching*: Join line-break hyphens (`pow-\nerful` $\to$ `powerful`) when followed by lowercase characters, and apply symmetric hyphen/whitespace normalization during span evaluation.
+  7. *Version-Aware Deduplication*: Store `chunker_version` (e.g. `0.2.0`) in document metadata; if stored documents have an older or missing version, re-parse and re-index.
+- **Consequences**: A real 34-page paper yields 130 rich, clean chunks (100 text, 12 figure_ref, 9 table, 9 references restricted strictly to pages 9–11). Headings like `B.7. Inference Acceleration` and `5.2. SVD-Compression Results` are cleanly partitioned and inherited. Stale chunk caches are cleanly invalidated.

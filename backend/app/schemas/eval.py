@@ -52,14 +52,28 @@ class GoldEvidence(BaseModel):
 
 
 def normalize_text_span(text: str) -> str:
-    """Normalize whitespace and lowercase for robust span matching."""
-    return re.sub(r"\s+", " ", text).strip().lower()
+    """
+    Normalize hyphens and whitespace on both sides for robust span matching:
+    1. Replaces unicode dashes/hyphens with ASCII '-'
+    2. Joins line-break hyphens ("pow-\nerful" or "pow- erful" -> "powerful") when next char is lowercase
+    3. Normalizes whitespace and lowercases
+    """
+    if not text:
+        return ""
+    # Replace various unicode hyphens/dashes with standard ASCII '-'
+    t = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]", "-", text)
+    # Join line-break hyphens ("pow-\nerful" -> "powerful")
+    t = re.sub(r"(\b[a-zA-Z]+)-\s*\n\s*([a-z][a-zA-Z]*)", r"\1\2", t)
+    # Also handle space-separated line-break hyphen remnants ("pow- erful" -> "powerful")
+    t = re.sub(r"(\b[a-zA-Z]+)-\s+([a-z][a-zA-Z]*)", r"\1\2", t)
+    # Normalize multiple whitespace characters to single space and lowercase
+    return re.sub(r"\s+", " ", t).strip().lower()
 
 
 def is_chunk_match(chunk_page: int, chunk_text: str, gold_page: int, answer_span: str) -> bool:
     """
     Determine if a chunk matches gold evidence:
-    Chunk must be on the same page and contain the answer span (normalized whitespace, case-insensitive).
+    Chunk must be on the same page and contain the answer span (normalized hyphens and whitespace, case-insensitive).
     """
     if chunk_page != gold_page:
         return False

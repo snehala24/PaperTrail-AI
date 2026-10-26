@@ -8,6 +8,7 @@ class DocumentStorage:
     """
     JSON-based file storage for Documents and Chunks.
     Persists data in data/ (gitignored) and maintains SHA-256 deduplication indexing.
+    Re-ingests and overwrites if document was produced by an older chunker version.
     """
 
     def __init__(self, base_dir: Path | str = "./data"):
@@ -83,14 +84,18 @@ class DocumentStorage:
                 continue
         return all_chunks
 
-    def save_document(self, doc: Document, chunks: List[Chunk]) -> Document:
+    def save_document(
+        self, doc: Document, chunks: List[Chunk], force_overwrite: bool = False
+    ) -> Document:
         """
         Save Document and Chunks to disk.
-        If a document with the same SHA-256 exists, return existing document (deduplication).
+        If a document with the same SHA-256 exists with matching chunker_version, return existing.
+        If chunker_version is older or force_overwrite is True, overwrite stored document and chunks.
         """
         existing = self.get_document_by_sha256(doc.sha256)
-        if existing:
-            return existing
+        if existing and not force_overwrite:
+            if getattr(existing, "chunker_version", None) == doc.chunker_version:
+                return existing
 
         doc_path = self.docs_dir / f"{doc.doc_id}.json"
         with open(doc_path, "w", encoding="utf-8") as f:

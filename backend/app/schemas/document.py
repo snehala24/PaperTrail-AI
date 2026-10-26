@@ -2,6 +2,8 @@ from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
+CHUNKER_VERSION: str = "0.2.0"
+
 
 class ChunkKind(str, Enum):
     TEXT = "text"
@@ -17,6 +19,10 @@ class Document(BaseModel):
     filename: str = Field(..., description="Original filename of the uploaded PDF")
     sha256: str = Field(..., description="SHA-256 hash of the original document content")
     page_count: int = Field(..., ge=0, description="Total number of pages in the document")
+    chunker_version: Optional[str] = Field(
+        default=None,
+        description="Version of chunker algorithm used; permits re-ingestion on chunker updates"
+    )
     extraction_warnings: List[str] = Field(
         default_factory=list,
         description="Recorded extraction warnings and parser issues; never silently dropped"

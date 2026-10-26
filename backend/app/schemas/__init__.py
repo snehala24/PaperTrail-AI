@@ -1,4 +1,4 @@
-from .document import Document, Chunk, ChunkKind
+from .document import Document, Chunk, ChunkKind, CHUNKER_VERSION
 from .claim import Claim, EvidenceLink, EvidenceRelation
 from .citation import CitationCheck
 from .answer import Answer
@@ -7,6 +7,7 @@ from .eval import BenchmarkQuestion, BenchmarkQuestionType, BenchmarkStatus, Gol
 from .retrieval import SearchRequest, ScoredChunk, SearchResponse
 
 __all__ = [
+    "CHUNKER_VERSION",
     "Document",
     "Chunk",
     "ChunkKind",
