@@ -4,6 +4,7 @@ from .claim import Claim, EvidenceLink, EvidenceRelation
 from .citation import CitationCheck
 from .answer import Answer
 from .api import HealthResponse, DocumentUploadResponse
+from .eval import BenchmarkQuestion, BenchmarkQuestionType, BenchmarkStatus, GoldEvidence
 
 __all__ = [
     "Document",
@@ -16,4 +17,8 @@ __all__ = [
     "Answer",
     "HealthResponse",
     "DocumentUploadResponse",
+    "BenchmarkQuestion",
+    "BenchmarkQuestionType",
+    "BenchmarkStatus",
+    "GoldEvidence",
 ]

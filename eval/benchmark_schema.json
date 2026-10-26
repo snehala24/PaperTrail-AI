@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PaperTrail AI Benchmark Dataset Schemas",
+  "description": "Schema definition for benchmark evaluation questions and gold-standard evidence links.",
+  "definitions": {
+    "BenchmarkQuestion": {
+      "type": "object",
+      "required": ["question_id", "question", "question_type", "status", "target_doc_ids"],
+      "properties": {
+        "question_id": {
+          "type": "string",
+          "description": "Unique identifier for the benchmark query (e.g., Q-001)"
+        },
+        "question": {
+          "type": "string",
+          "description": "The natural language research question"
+        },
+        "question_type": {
+          "type": "string",
+          "enum": ["factual", "comparative", "apparent_conflict", "unanswerable", "methodological"],
+          "description": "Taxonomy category used to evaluate retrieval and reasoning performance"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "verified"],
+          "description": "Annotation status; starts as 'draft' until verified by human annotator"
+        },
+        "target_doc_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Document IDs containing relevant context"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Contextual notes or guidance for annotators"
+        }
+      }
+    },
+    "GoldEvidence": {
+      "type": "object",
+      "required": ["gold_id", "question_id", "chunk_id", "expected_relation", "status"],
+      "properties": {
+        "gold_id": {
+          "type": "string",
+          "description": "Unique identifier for the gold evidence record (e.g., GOLD-001)"
+        },
+        "question_id": {
+          "type": "string",
+          "description": "Reference to the associated question_id"
+        },
+        "chunk_id": {
+          "type": "string",
+          "description": "Reference to the ground-truth chunk_id"
+        },
+        "expected_relation": {
+          "type": "string",
+          "enum": ["supports", "weakens", "contradicts", "contextualizes", "insufficient"],
+          "description": "Expected claim-to-evidence relation"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "verified"],
+          "description": "Annotation verification status"
+        },
+        "conflict_reason": {
+          "type": ["string", "null"],
+          "description": "Reason for apparent conflict (dataset, metric, hyperparameter, conditions)"
+        },
+        "annotator_notes": {
+          "type": "string",
+          "description": "Detailed justification or annotation notes"
+        }
+      }
+    }
+  }
+}
