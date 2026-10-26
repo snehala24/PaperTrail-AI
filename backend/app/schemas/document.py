@@ -7,6 +7,7 @@ class ChunkKind(str, Enum):
     TEXT = "text"
     TABLE = "table"
     FIGURE_REF = "figure_ref"
+    REFERENCES = "references"
 
 
 class Document(BaseModel):
@@ -41,5 +42,5 @@ class Chunk(BaseModel):
     text: str = Field(..., min_length=1, description="Extracted raw or cleaned text content")
     kind: ChunkKind = Field(
         default=ChunkKind.TEXT,
-        description="Chunk type: text, table, or figure_ref"
+        description="Chunk type: text, table, figure_ref, or references"
     )
