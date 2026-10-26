@@ -33,9 +33,17 @@ def test_eval_questions_loading():
                 q = BenchmarkQuestion(**item)
                 questions.append(q)
 
-    assert len(questions) == 10
-    assert all(q.status == BenchmarkStatus.AI_DRAFT for q in questions)
-    assert all(q.labelled_by == "assistant" for q in questions)
+    assert len(questions) == 30
+    ai_questions = [q for q in questions if q.status == BenchmarkStatus.AI_DRAFT]
+    human_questions = [
+        q for q in questions
+        if q.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED)
+    ]
+    assert len(ai_questions) == 10
+    assert all(q.labelled_by == "assistant" for q in ai_questions)
+
+    assert len(human_questions) == 20
+    assert all(q.labelled_by == "snehala24" for q in human_questions)
 
     categories = {q.question_type for q in questions}
     assert BenchmarkQuestionType.FACTUAL in categories
@@ -57,12 +65,21 @@ def test_eval_gold_evidence_loading():
                 g = GoldEvidence(**item)
                 gold_entries.append(g)
 
-    assert len(gold_entries) == 10
-    assert all(g.status == BenchmarkStatus.AI_DRAFT for g in gold_entries)
-    assert all(g.labelled_by == "assistant" for g in gold_entries)
+    assert len(gold_entries) == 34
+    ai_gold = [g for g in gold_entries if g.status == BenchmarkStatus.AI_DRAFT]
+    human_gold = [
+        g for g in gold_entries
+        if g.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED)
+    ]
+    assert len(ai_gold) == 10
+    assert all(g.labelled_by == "assistant" for g in ai_gold)
+
+    assert len(human_gold) == 24
+    assert all(g.labelled_by == "snehala24" for g in human_gold)
 
     for g in gold_entries:
-        assert len(g.doc_sha256) == 64
+        if not ("TODO" in g.doc_sha256 or g.answer_span.startswith("TODO")):
+            assert len(g.doc_sha256) == 64
         assert g.page >= 1
         assert len(g.answer_span) > 0
         if g.expected_relation in (EvidenceRelation.CONTRADICTS, EvidenceRelation.WEAKENS):

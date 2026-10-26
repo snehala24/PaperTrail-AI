@@ -3,12 +3,13 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 # Offline flags for fast local evaluation without HF hub lookups
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from backend.app.schemas import (
     BenchmarkQuestion,
     GoldEvidence,
@@ -77,13 +78,72 @@ def ensure_eval_corpus(gold_by_q: Dict[str, List[GoldEvidence]]) -> List[Chunk]:
     return []
 
 
+def aggregate_metrics_for_subset(
+    questions: List[BenchmarkQuestion],
+    per_q_eval: Dict[str, Dict[str, Any]],
+    configs: List[str] = ["bm25", "dense", "hybrid_rrf", "hybrid_rerank"],
+) -> Dict[str, Any]:
+    """Aggregate metrics and compute 95% bootstrap CIs for a filtered subset of questions."""
+    eval_qids = [q.question_id for q in questions if q.question_id in per_q_eval]
+    unanswerable_count = len([q for q in questions if q.question_type == "unanswerable"])
+
+    all_q_metrics: Dict[str, List[Dict[str, float]]] = {c: [] for c in configs}
+    q_type_metrics: Dict[str, Dict[str, List[Dict[str, float]]]] = {}
+
+    for qid in eval_qids:
+        entry = per_q_eval[qid]
+        q_type = entry["q_type"]
+        for cfg in configs:
+            m = entry["metrics"][cfg]
+            all_q_metrics[cfg].append(m)
+            q_type_metrics.setdefault(q_type, {}).setdefault(cfg, []).append(m)
+
+    def avg_metrics(metric_list: List[Dict[str, float]]) -> Dict[str, float]:
+        if not metric_list:
+            return {}
+        keys = metric_list[0].keys()
+        return {k: round(sum(m[k] for m in metric_list) / len(metric_list), 4) for k in keys}
+
+    results_by_config: Dict[str, Dict[str, float]] = {}
+    ci_by_config: Dict[str, Dict[str, Tuple[float, float]]] = {}
+    for cfg in configs:
+        results_by_config[cfg] = avg_metrics(all_q_metrics[cfg])
+        rec5_vals = [m.get("recall@5", 0.0) for m in all_q_metrics[cfg]]
+        mrr_vals = [m.get("mrr", 0.0) for m in all_q_metrics[cfg]]
+        ci_by_config[cfg] = {
+            "recall@5_ci95": bootstrap_ci_95(rec5_vals, n_resamples=1000),
+            "mrr_ci95": bootstrap_ci_95(mrr_vals, n_resamples=1000),
+        }
+
+    breakdown_by_type: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for q_type, cfg_dict in q_type_metrics.items():
+        breakdown_by_type[q_type] = {}
+        for cfg, m_list in cfg_dict.items():
+            breakdown_by_type[q_type][cfg] = avg_metrics(m_list)
+
+    n_eval = len(eval_qids)
+    warning_msg = None
+    if n_eval < 30:
+        warning_msg = f"Sample size (n={n_eval}) too small for statistical significance (n < 30)."
+
+    return {
+        "n_total": len(questions),
+        "n_answerable_evaluated": n_eval,
+        "n_unanswerable_reserved": unanswerable_count,
+        "statistical_warning": warning_msg,
+        "overall_metrics_by_config": results_by_config,
+        "confidence_intervals_95": ci_by_config,
+        "breakdown_by_question_type": breakdown_by_type,
+    }
+
+
 def run_retrieval_eval() -> Dict[str, Any]:
     """
-    Execute evaluation across the 4 configurations and record timestamped run log.
-    - Evaluates retrieval metrics ONLY on answerable questions with gold evidence.
-    - Reserves unanswerable questions for Day 3 honest abstention.
-    - Calculates 95% bootstrap confidence intervals for Recall@5 and MRR (1000 resamples).
-    - Emits statistical power warning when n < 30.
+    Execute single-pass retrieval across configurations and record timestamped run log.
+    Partitions benchmark into:
+      - Human-labelled benchmark (human_draft / human_verified, labelled_by: snehala24)
+      - AI-draft benchmark (ai_draft, labelled_by: assistant)
+    Calculates 95% bootstrap confidence intervals and reports both subsets separately.
     """
     repo_root = Path(__file__).resolve().parents[3]
     eval_dir = repo_root / "eval"
@@ -102,28 +162,24 @@ def run_retrieval_eval() -> Dict[str, Any]:
 
     reranker = CrossEncoderReranker()
     chunk_map = {c.chunk_id: c for c in chunks}
-
-    # Partition into answerable and unanswerable questions
-    answerable_questions: List[BenchmarkQuestion] = [
-        q for q in questions
-        if q.question_type != "unanswerable" and len(gold_by_q.get(q.question_id, [])) > 0
-    ]
-    unanswerable_questions: List[BenchmarkQuestion] = [
-        q for q in questions if q not in answerable_questions
-    ]
-
     configs = ["bm25", "dense", "hybrid_rrf", "hybrid_rerank"]
-    results_by_config: Dict[str, Dict[str, float]] = {c: {} for c in configs}
-    ci_by_config: Dict[str, Dict[str, Tuple[float, float]]] = {c: {} for c in configs}
-    breakdown_by_type: Dict[str, Dict[str, Dict[str, float]]] = {}
-
     k_list = [1, 3, 5, 10]
-    all_q_metrics: Dict[str, List[Dict[str, float]]] = {c: [] for c in configs}
-    q_type_metrics: Dict[str, Dict[str, List[Dict[str, float]]]] = {}
 
-    for q in answerable_questions:
+    # Single pass: execute retrieval and compute metrics per answerable question
+    per_q_eval: Dict[str, Dict[str, Any]] = {}
+
+    for q in questions:
+        if q.question_type == "unanswerable":
+            continue
+        g_items = gold_by_q.get(q.question_id, [])
+        active_golds = [
+            g for g in g_items
+            if not ("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")))
+        ]
+        if not active_golds:
+            continue
+
         q_type = q.question_type.value if hasattr(q.question_type, "value") else str(q.question_type)
-        gold_items = gold_by_q.get(q.question_id, [])
 
         # 1. BM25 Search
         bm25_raw = bm25.search(q.question, top_k=20)
@@ -150,44 +206,34 @@ def run_retrieval_eval() -> Dict[str, Any]:
             "hybrid_rerank": rerank_chunks,
         }
 
+        q_cfg_metrics: Dict[str, Dict[str, float]] = {}
         for cfg_name, retrieved in runs.items():
-            m = compute_retrieval_metrics(retrieved, gold_items, k_list=k_list)
-            all_q_metrics[cfg_name].append(m)
+            q_cfg_metrics[cfg_name] = compute_retrieval_metrics(retrieved, active_golds, k_list=k_list)
 
-            q_type_metrics.setdefault(q_type, {}).setdefault(cfg_name, []).append(m)
-
-    # Aggregate means
-    def avg_metrics(metric_list: List[Dict[str, float]]) -> Dict[str, float]:
-        if not metric_list:
-            return {}
-        keys = metric_list[0].keys()
-        return {k: round(sum(m[k] for m in metric_list) / len(metric_list), 4) for k in keys}
-
-    for cfg in configs:
-        results_by_config[cfg] = avg_metrics(all_q_metrics[cfg])
-        rec5_vals = [m.get("recall@5", 0.0) for m in all_q_metrics[cfg]]
-        mrr_vals = [m.get("mrr", 0.0) for m in all_q_metrics[cfg]]
-        ci_by_config[cfg] = {
-            "recall@5_ci95": bootstrap_ci_95(rec5_vals, n_resamples=1000),
-            "mrr_ci95": bootstrap_ci_95(mrr_vals, n_resamples=1000),
+        per_q_eval[q.question_id] = {
+            "q_type": q_type,
+            "metrics": q_cfg_metrics,
         }
 
-    for q_type, cfg_dict in q_type_metrics.items():
-        breakdown_by_type[q_type] = {}
-        for cfg, m_list in cfg_dict.items():
-            breakdown_by_type[q_type][cfg] = avg_metrics(m_list)
+    # Partition questions by provenance
+    human_questions = [
+        q for q in questions
+        if q.labelled_by != "assistant" or q.status in ("human_draft", "human_verified", "verified")
+    ]
+    ai_questions = [
+        q for q in questions
+        if q.labelled_by == "assistant" or q.status == "ai_draft"
+    ]
 
-    n_eval = len(answerable_questions)
-    warning_msg = None
-    if n_eval < 30:
-        warning_msg = f"Sample size (n={n_eval}) too small for statistical significance (n < 30)."
+    human_eval = aggregate_metrics_for_subset(human_questions, per_q_eval, configs=configs)
+    ai_eval = aggregate_metrics_for_subset(ai_questions, per_q_eval, configs=configs)
+    combined_eval = aggregate_metrics_for_subset(questions, per_q_eval, configs=configs)
 
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_record: Dict[str, Any] = {
         "run_id": f"run_{timestamp_str}",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "git_commit": get_git_commit(),
-        "benchmark_provenance": "ai_draft",
         "models": {
             "embedding_model": dense.model_name,
             "reranker_model": reranker.model_name,
@@ -197,14 +243,11 @@ def run_retrieval_eval() -> Dict[str, Any]:
             "max_chars": 1500,
             "max_table_chars": 2500,
         },
-        "total_questions": len(questions),
-        "answerable_questions_evaluated": n_eval,
-        "unanswerable_questions_reserved": len(unanswerable_questions),
-        "statistical_warning": warning_msg,
         "total_corpus_chunks": len(chunks),
-        "overall_metrics_by_config": results_by_config,
-        "confidence_intervals_95": ci_by_config,
-        "breakdown_by_question_type": breakdown_by_type,
+        "total_questions": len(questions),
+        "human_labeled": human_eval,
+        "ai_draft": ai_eval,
+        "combined": combined_eval,
     }
 
     # Save to eval/runs/<timestamp>.json
@@ -215,36 +258,43 @@ def run_retrieval_eval() -> Dict[str, Any]:
     return run_record
 
 
-def main():
-    print("=" * 70)
-    print("Running PaperTrail AI Retrieval Benchmark Runner")
-    print("=" * 70)
-    record = run_retrieval_eval()
-    print(f"\nRun ID: {record['run_id']}")
-    print(f"Commit: {record['git_commit']}")
-    print(f"Total Questions: {record['total_questions']}")
-    print(f"Answerable Evaluated: {record['answerable_questions_evaluated']}")
-    print(f"Unanswerable Reserved (Day 3 Abstention): {record['unanswerable_questions_reserved']}")
-    print(f"Corpus Chunks: {record['total_corpus_chunks']}")
+def print_results_table(title: str, eval_data: Dict[str, Any]):
+    print(f"\n{'=' * 75}")
+    print(f"  {title.upper()}")
+    print(f"  Questions Evaluated (Answerable): n = {eval_data['n_answerable_evaluated']}  |  Reserved Unanswerable: {eval_data['n_unanswerable_reserved']}")
+    if eval_data.get("statistical_warning"):
+        print(f"  >>> WARNING: {eval_data['statistical_warning']} <<<")
+    print(f"{'=' * 75}")
 
-    if record.get("statistical_warning"):
-        print(f"\n>>> WARNING: {record['statistical_warning']} <<<")
-
-    print("\n--- Overall Metrics by Configuration ---")
     header = f"{'Config':<16} | {'Recall@1':<9} | {'Recall@5 (95% CI)':<22} | {'MRR (95% CI)':<20} | {'nDCG@5':<8}"
     print(header)
     print("-" * len(header))
-    for cfg, m in record["overall_metrics_by_config"].items():
-        ci = record["confidence_intervals_95"].get(cfg, {})
+    for cfg, m in eval_data["overall_metrics_by_config"].items():
+        ci = eval_data["confidence_intervals_95"].get(cfg, {})
         rec5_str = f"{m.get('recall@5', 0.0):.4f} {ci.get('recall@5_ci95', (0,0))}"
         mrr_str = f"{m.get('mrr', 0.0):.4f} {ci.get('mrr_ci95', (0,0))}"
         print(f"{cfg:<16} | {m.get('recall@1', 0.0):<9.4f} | {rec5_str:<22} | {mrr_str:<20} | {m.get('ndcg@5', 0.0):<8.4f}")
 
-    print("\n--- Breakdown by Question Type (nDCG@5) ---")
-    for q_type, cfg_data in record["breakdown_by_question_type"].items():
+    print(f"\n--- Breakdown by Question Type (nDCG@5 / Recall@5) ---")
+    for q_type, cfg_data in eval_data.get("breakdown_by_question_type", {}).items():
         print(f"Category: {q_type.upper()}")
         for cfg, m in cfg_data.items():
             print(f"  {cfg:<14}: nDCG@5 = {m.get('ndcg@5', 0.0):.4f}, Recall@5 = {m.get('recall@5', 0.0):.4f}")
+
+
+def main():
+    print("=" * 75)
+    print("Running PaperTrail AI Retrieval Benchmark Runner")
+    print("=" * 75)
+    record = run_retrieval_eval()
+    print(f"\nRun ID: {record['run_id']}")
+    print(f"Commit: {record['git_commit']}")
+    print(f"Corpus Chunks: {record['total_corpus_chunks']}")
+    print(f"Total Benchmark Questions: {record['total_questions']}")
+
+    print_results_table("1. Human-Labelled Benchmark (Annotator: snehala24)", record["human_labeled"])
+    print_results_table("2. AI-Draft Benchmark (Annotator: assistant - Pipeline Validation)", record["ai_draft"])
+    print_results_table("3. Combined Benchmark (Human + AI-Draft)", record["combined"])
 
 
 if __name__ == "__main__":

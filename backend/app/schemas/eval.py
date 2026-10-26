@@ -16,6 +16,7 @@ class BenchmarkQuestionType(str, Enum):
 class BenchmarkStatus(str, Enum):
     DRAFT = "draft"
     AI_DRAFT = "ai_draft"
+    HUMAN_DRAFT = "human_draft"
     VERIFIED = "verified"
     HUMAN_VERIFIED = "human_verified"
 

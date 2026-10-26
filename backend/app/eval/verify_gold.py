@@ -60,9 +60,16 @@ def verify_benchmark_gold() -> int:
 
     # Check each gold item
     gold_matches: Dict[str, List[str]] = {}
+    pending_gold: List[GoldEvidence] = []
     unmatched_gold: List[GoldEvidence] = []
 
     for g in gold_items:
+        # Check if marked as pending cross-paper stub
+        if "TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")):
+            pending_gold.append(g)
+            gold_matches[g.gold_id] = []
+            continue
+
         matching_cids: List[str] = []
 
         # Check explicit chunk IDs if provided
@@ -93,29 +100,45 @@ def verify_benchmark_gold() -> int:
     for q in questions:
         q_golds = gold_by_q.get(q.question_id, [])
         all_q_matches: Set[str] = set()
+        has_pending = False
         for g in q_golds:
+            if g in pending_gold:
+                has_pending = True
             all_q_matches.update(gold_matches.get(g.gold_id, []))
 
         if q.question_type == BenchmarkQuestionType.UNANSWERABLE:
             unanswerable_count += 1
             print(f"  [UNANSWERABLE] {q.question_id}: '{q.question[:65]}...' (Expected 0 matches: correctly reserved for Day 3 abstention)")
+        elif len(all_q_matches) > 0 and has_pending:
+            answerable_count += 1
+            matched_questions.append((q, sorted(list(all_q_matches))))
+            print(f"  [PARTIAL/STUB] {q.question_id}: '{q.question[:65]}...' -> Matched {len(all_q_matches)} chunk(s) (GFWSVD stub pending ingestion): {sorted(list(all_q_matches))}")
         elif len(all_q_matches) > 0:
             answerable_count += 1
             matched_questions.append((q, sorted(list(all_q_matches))))
             print(f"  [VERIFIED]     {q.question_id}: '{q.question[:65]}...' -> Matched {len(all_q_matches)} chunk(s): {sorted(list(all_q_matches))}")
+        elif has_pending:
+            print(f"  [PENDING STUB] {q.question_id}: '{q.question[:65]}...' -> Awaiting document ingestion")
         else:
             orphan_questions.append(q)
             print(f"  [ORPHAN]       {q.question_id}: '{q.question[:65]}...' -> ZERO matching chunks in corpus!")
 
     print("\n" + "=" * 60)
     print("VERIFICATION SUMMARY:")
-    print(f"  Total Questions:        {len(questions)}")
-    print(f"  Answerable (Matched):   {answerable_count}")
-    print(f"  Unanswerable (Reserved): {unanswerable_count}")
-    print(f"  Orphan Questions:       {len(orphan_questions)}")
-    print(f"  Total Gold Items:       {len(gold_items)}")
-    print(f"  Unmatched Gold Items:   {len(unmatched_gold)}")
+    print(f"  Total Questions:          {len(questions)}")
+    print(f"  Answerable (Matched):     {answerable_count}")
+    print(f"  Unanswerable (Reserved):  {unanswerable_count}")
+    print(f"  Orphan Questions:         {len(orphan_questions)}")
+    print(f"  Total Gold Items:         {len(gold_items)}")
+    print(f"  Verified Gold Items:      {len(gold_items) - len(pending_gold) - len(unmatched_gold)}")
+    print(f"  Pending Cross-Paper Stubs:{len(pending_gold)}")
+    print(f"  Unmatched Gold Items:     {len(unmatched_gold)}")
     print("=" * 60)
+
+    if pending_gold:
+        print("\nPending Cross-Paper Stubs (awaiting GFWSVD ingestion):")
+        for pg in pending_gold:
+            print(f"  * {pg.gold_id} ({pg.question_id}): \"{pg.answer_span}\" [doc: {pg.doc_sha256}]")
 
     if unmatched_gold:
         print("\nUnmatched Gold Evidence Items:")
