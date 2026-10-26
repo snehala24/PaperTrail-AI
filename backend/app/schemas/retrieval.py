@@ -36,4 +36,5 @@ class SearchResponse(BaseModel):
     """Search response returning scored and reranked chunks."""
     query: str
     results: List[ScoredChunk]
-    total_candidates: int
+    total_candidates: int = Field(..., description="Size of pre-top_k candidate pool")
+    returned_count: int = Field(..., description="Number of results actually returned (len(results))")

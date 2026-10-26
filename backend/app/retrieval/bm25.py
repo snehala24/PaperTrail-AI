@@ -27,7 +27,15 @@ class BM25Index:
             tokenize(f"{c.section_heading or ''}\n{c.text}".strip())
             for c in self.chunks
         ]
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        # Guard against empty corpus or corpus without alphanumeric tokens
+        if not any(tokenized_corpus):
+            self.bm25 = None
+            return
+
+        try:
+            self.bm25 = BM25Okapi(tokenized_corpus)
+        except ZeroDivisionError:
+            self.bm25 = None
 
     def search(self, query: str, top_k: int = 50) -> List[Tuple[Chunk, float, int]]:
         """

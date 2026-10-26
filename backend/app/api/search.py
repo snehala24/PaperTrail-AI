@@ -30,9 +30,11 @@ def search_corpus(req: SearchRequest) -> SearchResponse:
         include_references=req.include_references,
         use_reranker=True,
     )
+    total_candidates = getattr(retriever, "last_total_candidates", len(results))
 
     return SearchResponse(
         query=req.query,
         results=results,
-        total_candidates=len(results),
+        total_candidates=total_candidates,
+        returned_count=len(results),
     )

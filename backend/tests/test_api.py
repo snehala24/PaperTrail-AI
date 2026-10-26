@@ -145,6 +145,8 @@ def test_post_search_endpoint():
         assert isinstance(res, SearchResponse)
         assert res.query == "attention mechanism"
         assert res.results == []
+        assert res.returned_count == 0
+        assert res.total_candidates == 0
         mock_search.assert_called_once_with(
             query="attention mechanism",
             top_k=5,

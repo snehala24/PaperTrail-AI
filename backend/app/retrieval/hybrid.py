@@ -21,6 +21,7 @@ class HybridRetriever:
         self.dense = DenseIndex(model_name=dense_model_name)
         self.reranker = CrossEncoderReranker(model_name=reranker_model_name)
         self.chunks_by_id: Dict[str, Chunk] = {}
+        self.last_total_candidates: int = 0
 
     def index_chunks(self, chunks: List[Chunk]) -> None:
         """Index or update chunk corpus for both BM25 and dense retrieval."""
@@ -85,6 +86,8 @@ class HybridRetriever:
         for rank, (cid, score) in enumerate(fused_pool, start=1):
             fused_dict[cid] = (score, rank)
             candidate_chunks.append(self.chunks_by_id[cid])
+
+        self.last_total_candidates = len(candidate_chunks)
 
         # Stage 4: Cross-Encoder Reranker
         if use_reranker and candidate_chunks:
