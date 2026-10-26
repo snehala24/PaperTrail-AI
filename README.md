@@ -127,13 +127,19 @@ pip install -r backend/requirements.txt
 .\.venv\Scripts\pytest.exe backend/tests -v
 ```
 
-### 3. Run Retrieval Evaluation Benchmark
+### 3. Verify Benchmark Gold Alignment (CLI)
+```powershell
+# Verifies that benchmark gold evidence spans match real chunks in data/
+.\.venv\Scripts\python.exe -m backend.app.eval.verify_gold
+```
+
+### 4. Run Retrieval Evaluation Benchmark
 ```powershell
 # Executes retrieval benchmark across all 4 configurations and saves run artifact to eval/runs/
 .\.venv\Scripts\python.exe -m backend.app.eval.run_retrieval
 ```
 
-### 4. Run Backend API Server
+### 5. Run Backend API Server
 ```powershell
 # Start FastAPI application
 .\.venv\Scripts\uvicorn.exe backend.app.main:app --reload --host 0.0.0.0 --port 8000
@@ -144,31 +150,37 @@ pip install -r backend/requirements.txt
 
 ---
 
-## 📊 Day 2 Empirical Benchmark Results
+## 📊 Day 2 Retrieval Benchmark Results
 
-### 1. Primary Empirical Evaluation (Real Ingested Corpus)
-Evaluated on [`eval/questions.jsonl`](file:///eval/questions.jsonl) with 10 hand-labelled benchmark questions across all 5 evaluation categories, evaluated directly against the real stored document chunks (`2610.32878v1.pdf` and corpus background, **188 total chunks**).  
-Gold evidence uses verified short quotes (zero full-paper copying; no planted synthetic text).  
-Run Provenance Artifact: [`eval/runs/run_20261026_085318.json`](file:///eval/runs/run_20261026_085318.json)
+> [!WARNING]
+> **Benchmark Provenance Notice**: The 10 benchmark queries and gold spans in `eval/` are **AI-generated drafts** (`status: "ai_draft"`, `labelled_by: "assistant"`), not human-verified. See [`eval/LABELLING.md`](file:///eval/LABELLING.md) for provenance details and the human verification protocol.
 
-#### Overall Retrieval Metrics (10 Questions, Corpus = 188 chunks)
+### Benchmark Setup & Methodology (Chunker v0.2.2)
+- Evaluated against real stored document chunks from `data/2610.32878v1.pdf` (214 chunks).
+- **Total Questions**: 10
+- **Answerable Questions Evaluated**: 8
+- **Unanswerable Questions Reserved**: 2 (Q-009, Q-010 reserved for Day 3 honest abstention; not penalized as retrieval failures)
+- **Statistical Significance**: Sample size ($n=8$) is small ($n < 30$), resulting in wide confidence intervals. Reported metrics serve as an empirical pipeline baseline.
+- **Run Artifact**: [`eval/runs/run_20261026_112037.json`](file:///eval/runs/run_20261026_112037.json)
 
-| Configuration | Recall@1 | Recall@5 | MRR | nDCG@5 |
+#### Overall Retrieval Metrics (8 Answerable Questions, Chunker v0.2.2)
+
+| Configuration | Recall@1 | Recall@5 (95% Bootstrap CI) | MRR (95% Bootstrap CI) | nDCG@5 |
 | :--- | :---: | :---: | :---: | :---: |
-| **BM25-only** | **0.6000** | **0.7000** | **0.6500** | **0.5857** |
-| **Dense-only** (`all-MiniLM-L6-v2`) | 0.3000 | 0.6000 | 0.4529 | 0.4131 |
-| **Hybrid (RRF, k=60)** | 0.5000 | **0.7000** | 0.5833 | 0.5357 |
-| **Hybrid + Cross-Encoder Rerank** | 0.4000 | **0.7000** | 0.5333 | 0.5131 |
+| **BM25-only** | **0.6250** | **0.8750** [0.625, 1.0] | **0.7500** [0.500, 0.938] | **0.7039** |
+| **Dense-only** (`all-MiniLM-L6-v2`) | 0.5000 | 0.7500 [0.375, 1.0] | 0.6286 [0.358, 0.882] | 0.5625 |
+| **Hybrid (RRF, k=60)** | **0.6250** | **0.8750** [0.625, 1.0] | 0.7292 [0.438, 0.938] | 0.6875 |
+| **Hybrid + Cross-Encoder Rerank** | 0.5000 | **0.8750** [0.625, 1.0] | 0.6667 [0.396, 0.875] | 0.6414 |
 
 #### Breakdown by Question Type (nDCG@5 / Recall@5)
 
 | Question Type (Count) | BM25 | Dense | Hybrid RRF | Hybrid + Rerank |
 | :--- | :---: | :---: | :---: | :---: |
 | **FACTUAL** (2 questions) | **1.0000** (R: 1.0) | **1.0000** (R: 1.0) | **1.0000** (R: 1.0) | **1.0000** (R: 1.0) |
-| **COMPARATIVE** (2 questions) | **0.8066** (R: 1.0) | 0.5566 (R: 1.0) | **0.8066** (R: 1.0) | **0.8066** (R: 1.0) |
-| **APPARENT_CONFLICT** (2 questions) | **0.6220** (R: 1.0) | 0.5089 (R: 1.0) | **0.6220** (R: 1.0) | 0.4434 (R: 1.0) |
+| **COMPARATIVE** (2 questions) | **0.8065** (R: 1.0) | 0.5565 (R: 1.0) | **0.8065** (R: 1.0) | **0.8065** (R: 1.0) |
+| **APPARENT_CONFLICT** (2 questions) | 0.5089 (R: 1.0) | **0.6935** (R: 1.0) | **0.6935** (R: 1.0) | 0.4435 (R: 1.0) |
 | **METHODOLOGICAL** (2 questions) | **0.5000** (R: 0.5) | 0.0000 (R: 0.0) | 0.2500 (R: 0.5) | 0.3155 (R: 0.5) |
-| **UNANSWERABLE** (2 questions) | 0.0000 (R: 0.0) | 0.0000 (R: 0.0) | 0.0000 (R: 0.0) | 0.0000 (R: 0.0) |
+| **UNANSWERABLE** (2 questions) | *Reserved* | *Reserved* | *Reserved* | *Reserved* |
 
 *Key Takeaway*: On real academic prose with 188 chunks, BM25 with section heading co-indexing provides a strong lexical baseline (MRR = 0.6500, nDCG@5 = 0.5857), achieving perfect 1.0000 recall on factual, comparative, and apparent conflict questions. For unanswerable queries, all models correctly avoid false hits (0.0000 recall), setting the foundation for honest abstention in Day 3.
 

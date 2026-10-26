@@ -34,7 +34,8 @@ def test_eval_questions_loading():
                 questions.append(q)
 
     assert len(questions) == 10
-    assert all(q.status == BenchmarkStatus.DRAFT for q in questions)
+    assert all(q.status == BenchmarkStatus.AI_DRAFT for q in questions)
+    assert all(q.labelled_by == "assistant" for q in questions)
 
     categories = {q.question_type for q in questions}
     assert BenchmarkQuestionType.FACTUAL in categories
@@ -57,7 +58,8 @@ def test_eval_gold_evidence_loading():
                 gold_entries.append(g)
 
     assert len(gold_entries) == 10
-    assert all(g.status == BenchmarkStatus.DRAFT for g in gold_entries)
+    assert all(g.status == BenchmarkStatus.AI_DRAFT for g in gold_entries)
+    assert all(g.labelled_by == "assistant" for g in gold_entries)
 
     for g in gold_entries:
         assert len(g.doc_sha256) == 64

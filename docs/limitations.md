@@ -8,8 +8,14 @@
 - **Section Detection**: Section headers are detected via regex heuristics (e.g. `1. Introduction`, `Abstract`, `Methodology`). Papers with idiosyncratic non-standard heading styles may have chunks grouped under generic headings.
 - **Cross-Page Table Spans**: Large tables spanning multiple consecutive pages are currently partitioned per-page rather than merged into a single atomic table chunk.
 
-## 3. Scope Boundaries for Day 1
-- **Retrieval Indexing**: Dense (FAISS) and lexical (BM25) hybrid indices, as well as cross-encoder reranking, are scheduled for implementation in Day 2.
-- **LLM Integration**: The `LLMProvider` abstraction and Gemini integration are scheduled for Day 3.
-- **Claim Extraction & Evidence Linking**: Two-step citation validation and claim-to-evidence ledgers are scheduled for Day 4.
-- **UI Frontend**: Next.js client is scheduled for Day 5.
+## 3. Benchmark Limitations & Sample Size
+- **AI-Draft Ground Truth**: All current benchmark questions and gold evidence spans in `eval/` are AI-generated drafts (`status: "ai_draft"`). They have not yet undergone expert human verification (see `eval/LABELLING.md` for human verification protocol).
+- **Single-Paper Grounding**: Current empirical benchmark queries are grounded in a single 34-page arXiv paper (`2610.32878v1.pdf`). Cross-paper multi-document query evaluation is implemented in the schema and runner, but extensive multi-paper benchmarks will be expanded as additional papers are added.
+- **Small Sample Size ($n=8$) & Wide Confidence Intervals**: With 8 answerable queries and 2 unanswerable queries, sample size is insufficient for formal statistical significance ($n < 30$). As reflected in the 95% bootstrap confidence intervals (e.g. Recall@5: [0.625, 1.0]), estimates have wide margins of error and serve primarily as a directional baseline and smoke test.
+
+## 4. Scope Boundaries for Day 1 & Day 2
+- **Day 1**: Contracts, ingestion, persistence, and evaluation scaffold completed.
+- **Day 2**: Passage chunker v0.2.2, BM25, dense FAISS, RRF fusion, cross-encoder reranker, and evaluation runner completed.
+- **Day 3 (Upcoming)**: LLMProvider abstraction, Gemini integration, answer generation, and honest abstention handling.
+- **Day 4 (Upcoming)**: Claim extraction, claim-to-evidence ledgers, apparent conflict reasoning, and two-step citation validation.
+- **Day 5 (Upcoming)**: Next.js frontend UI workspace.
