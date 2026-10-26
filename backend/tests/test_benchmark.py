@@ -7,6 +7,7 @@ from backend.app.schemas import (
     GoldEvidence,
     EvidenceRelation,
 )
+from backend.app.schemas.eval import is_chunk_match
 
 EVAL_DIR = Path(__file__).resolve().parents[2] / "eval"
 
@@ -32,11 +33,18 @@ def test_eval_questions_loading():
                 q = BenchmarkQuestion(**item)
                 questions.append(q)
 
-    assert len(questions) == 10
-    # All initial questions must be draft status
-    assert all(q.status == BenchmarkStatus.DRAFT for q in questions)
+    assert len(questions) == 30
+    ai_questions = [q for q in questions if q.status == BenchmarkStatus.AI_DRAFT]
+    human_questions = [
+        q for q in questions
+        if q.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED)
+    ]
+    assert len(ai_questions) == 10
+    assert all(q.labelled_by == "assistant" for q in ai_questions)
 
-    # Must cover required categories
+    assert len(human_questions) == 20
+    assert all(q.labelled_by == "snehala24" for q in human_questions)
+
     categories = {q.question_type for q in questions}
     assert BenchmarkQuestionType.FACTUAL in categories
     assert BenchmarkQuestionType.COMPARATIVE in categories
@@ -57,10 +65,37 @@ def test_eval_gold_evidence_loading():
                 g = GoldEvidence(**item)
                 gold_entries.append(g)
 
-    assert len(gold_entries) == 10
-    assert all(g.status == BenchmarkStatus.DRAFT for g in gold_entries)
+    assert len(gold_entries) == 34
+    ai_gold = [g for g in gold_entries if g.status == BenchmarkStatus.AI_DRAFT]
+    human_gold = [
+        g for g in gold_entries
+        if g.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED)
+    ]
+    assert len(ai_gold) == 10
+    assert all(g.labelled_by == "assistant" for g in ai_gold)
 
-    # Rule 3: Whenever relation is contradicts or weakens, conflict reason must be provided
+    assert len(human_gold) == 24
+    assert all(g.labelled_by == "snehala24" for g in human_gold)
+
     for g in gold_entries:
+        if not ("TODO" in g.doc_sha256 or g.answer_span.startswith("TODO")):
+            assert len(g.doc_sha256) == 64
+        assert g.page >= 1
+        assert len(g.answer_span) > 0
         if g.expected_relation in (EvidenceRelation.CONTRADICTS, EvidenceRelation.WEAKENS):
             assert g.conflict_reason is not None and len(g.conflict_reason) > 0
+
+
+def test_is_chunk_match_helper():
+    chunk_page = 3
+    chunk_text = "We evaluate BERT-Base with L=12, H=768, A=12, and Total Parameters=110M across downstream tasks."
+    gold_span = "Total Parameters=110M"
+
+    # Match on same page and text span
+    assert is_chunk_match(chunk_page, chunk_text, 3, gold_span) is True
+    # Case insensitivity
+    assert is_chunk_match(chunk_page, chunk_text, 3, "total parameters=110m") is True
+    # Different page must not match
+    assert is_chunk_match(chunk_page, chunk_text, 4, gold_span) is False
+    # Missing span must not match
+    assert is_chunk_match(chunk_page, chunk_text, 3, "Total Parameters=340M") is False

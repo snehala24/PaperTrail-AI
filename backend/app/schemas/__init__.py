@@ -1,12 +1,13 @@
-"""Pydantic v2 data contracts for PaperTrail AI."""
-from .document import Document, Chunk, ChunkKind
+from .document import Document, Chunk, ChunkKind, CHUNKER_VERSION
 from .claim import Claim, EvidenceLink, EvidenceRelation
 from .citation import CitationCheck
 from .answer import Answer
 from .api import HealthResponse, DocumentUploadResponse
-from .eval import BenchmarkQuestion, BenchmarkQuestionType, BenchmarkStatus, GoldEvidence
+from .eval import BenchmarkQuestion, BenchmarkQuestionType, BenchmarkStatus, GoldEvidence, is_chunk_match, normalize_text_span
+from .retrieval import SearchRequest, ScoredChunk, SearchResponse
 
 __all__ = [
+    "CHUNKER_VERSION",
     "Document",
     "Chunk",
     "ChunkKind",
@@ -21,4 +22,9 @@ __all__ = [
     "BenchmarkQuestionType",
     "BenchmarkStatus",
     "GoldEvidence",
+    "is_chunk_match",
+    "normalize_text_span",
+    "SearchRequest",
+    "ScoredChunk",
+    "SearchResponse",
 ]

@@ -1,0 +1,83 @@
+import pytest
+from backend.app.schemas import Chunk, ChunkKind
+from backend.app.retrieval.bm25 import BM25Index
+from backend.app.retrieval.dense import DenseIndex
+from backend.app.retrieval.fusion import reciprocal_rank_fusion
+from backend.app.retrieval.hybrid import HybridRetriever
+
+
+@pytest.fixture
+def sample_chunks():
+    return [
+        Chunk(
+            chunk_id="chk-1",
+            doc_id="doc-1",
+            page=1,
+            section_heading="1. Attention",
+            text="The Transformer relies entirely on multi-head self-attention mechanisms without recurrence.",
+            kind=ChunkKind.TEXT,
+        ),
+        Chunk(
+            chunk_id="chk-2",
+            doc_id="doc-1",
+            page=2,
+            section_heading="2. Results",
+            text="On the WMT 2014 English-to-German task, the base model achieved 28.4 BLEU.",
+            kind=ChunkKind.TEXT,
+        ),
+        Chunk(
+            chunk_id="chk-3",
+            doc_id="doc-2",
+            page=1,
+            section_heading="References",
+            text="[1] Vaswani et al. Attention is all you need. In NeurIPS 2017.",
+            kind=ChunkKind.REFERENCES,
+        ),
+    ]
+
+
+def test_bm25_index_search(sample_chunks):
+    bm25 = BM25Index()
+    bm25.build(sample_chunks)
+
+    results = bm25.search("BLEU German", top_k=2)
+    assert len(results) >= 1
+    assert results[0][0].chunk_id == "chk-2"
+    assert results[0][1] > 0.0  # Positive BM25 score
+
+
+def test_reciprocal_rank_fusion():
+    """Verify RRF formula: score = sum(1.0 / (k + rank))."""
+    # Item 1 is rank 1 in list A, rank 2 in list B
+    # Item 2 is rank 2 in list A, rank 1 in list B
+    # Item 3 is rank 3 in list A, absent in list B
+    ranks_bm25 = [("chk-1", 1), ("chk-2", 2), ("chk-3", 3)]
+    ranks_dense = [("chk-2", 1), ("chk-1", 2)]
+
+    fused = reciprocal_rank_fusion(
+        rankings=[ranks_bm25, ranks_dense],
+        k=60,
+    )
+
+    # chk-1: 1/(60+1) + 1/(60+2) = 1/61 + 1/62 = 0.01639 + 0.01613 = 0.03252
+    # chk-2: 1/(60+2) + 1/(60+1) = 0.03252 (tied)
+    # chk-3: 1/(60+3) = 0.01587
+    fused_dict = dict(fused)
+    assert fused_dict["chk-1"] > fused_dict["chk-3"]
+    assert fused_dict["chk-2"] > fused_dict["chk-3"]
+
+
+def test_hybrid_retriever_excludes_references_by_default(sample_chunks):
+    retriever = HybridRetriever()
+    retriever.index_chunks(sample_chunks)
+
+    # Search for Vaswani, which is mentioned in references chunk chk-3
+    results = retriever.search("Vaswani", top_k=5, include_references=False)
+    # References should be excluded
+    returned_ids = [r.chunk_id for r in results]
+    assert "chk-3" not in returned_ids
+
+    # With include_references=True, references can be returned
+    results_with_refs = retriever.search("Vaswani", top_k=5, include_references=True)
+    returned_ids_with_refs = [r.chunk_id for r in results_with_refs]
+    assert "chk-3" in returned_ids_with_refs

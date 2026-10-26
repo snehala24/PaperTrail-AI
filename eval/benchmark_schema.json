@@ -22,8 +22,8 @@
         },
         "status": {
           "type": "string",
-          "enum": ["draft", "verified"],
-          "description": "Annotation status; starts as 'draft' until verified by human annotator"
+          "enum": ["draft", "ai_draft", "human_draft", "verified", "human_verified"],
+          "description": "Annotation status; starts as 'human_draft' or 'ai_draft' until verified by human annotator"
         },
         "target_doc_ids": {
           "type": "array",
@@ -38,7 +38,7 @@
     },
     "GoldEvidence": {
       "type": "object",
-      "required": ["gold_id", "question_id", "chunk_id", "expected_relation", "status"],
+      "required": ["gold_id", "question_id", "doc_sha256", "page", "answer_span", "expected_relation", "status"],
       "properties": {
         "gold_id": {
           "type": "string",
@@ -48,9 +48,18 @@
           "type": "string",
           "description": "Reference to the associated question_id"
         },
-        "chunk_id": {
+        "doc_sha256": {
           "type": "string",
-          "description": "Reference to the ground-truth chunk_id"
+          "description": "SHA-256 hash of the document containing the answer"
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-indexed page number containing the evidence"
+        },
+        "answer_span": {
+          "type": "string",
+          "description": "Exact text span containing the evidence (matched case-insensitively with normalized whitespace)"
         },
         "expected_relation": {
           "type": "string",
@@ -59,7 +68,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["draft", "verified"],
+          "enum": ["draft", "ai_draft", "human_draft", "verified", "human_verified"],
           "description": "Annotation verification status"
         },
         "conflict_reason": {

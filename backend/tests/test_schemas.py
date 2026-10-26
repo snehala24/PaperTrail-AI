@@ -245,7 +245,7 @@ def test_citation_check_cannot_support_if_nonexistent():
             exists=False,
             supports=True,
         )
-    assert "cannot support a claim if the chunk does not exist" in str(exc_info.value)
+    assert "Citation support must be None" in str(exc_info.value)
 
 
 # ---------------------------------------------------------
