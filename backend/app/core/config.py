@@ -1,4 +1,10 @@
 import os
+
+# Essential Windows runtime flags for PyTorch + FAISS OpenMP compatibility and offline caching
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from typing import Optional
 from pydantic import BaseModel
 
