@@ -31,3 +31,21 @@
 - **Context**: Premature infrastructure (Redis, PostgreSQL, distributed queues) adds operational overhead during rapid prototyping and benchmark development.
 - **Decision**: Use in-memory indices, FAISS CPU, BM25, and local JSONL logging for Day 1–5.
 - **Consequences**: Fast feedback loops, instant test runs, and minimal deployment friction.
+
+## ADR-006: Passage-Level Chunker with Section Isolation and References Tagging
+- **Status**: Accepted (2026-10-26)
+- **Context**: Raw paragraph extraction yielded ~28 fragments per page (~963 chunks for a 34-page arXiv paper). Fragmentary chunks lack semantic context, overflow dense indices, and degrade retrieval recall. Additionally, bibliographic references pollute retrieval results when searching for author names or prior work citations.
+- **Decision**: 
+  1. Merge consecutive text blocks within the same page and section into cohesive passages of ~800–1500 characters (~200–400 tokens).
+  2. Enforce strict section boundaries: never merge text across detected section headers.
+  3. Keep tables isolated as separate chunks and cap table text length (~2500 characters).
+  4. Tag all content following a "References" heading as `ChunkKind.REFERENCES` and exclude reference chunks from search results by default (`include_references=False`).
+- **Consequences**: Target chunk yield for a 34-page paper drops from ~963 fragmentary chunks to ~80–200 rich passages, providing coherent context to retrievers and rerankers while keeping references accessible on demand.
+
+## ADR-007: Span-Based Gold Evidence Benchmarking
+- **Status**: Accepted (2026-10-26)
+- **Context**: Tying benchmark ground-truth labels directly to synthetic or temporary `chunk_id`s creates tight coupling between evaluation sets and specific chunking parameters. Modifying chunk sizes or boundary logic invalidates all existing gold labels.
+- **Decision**: Define ground-truth gold evidence as a tuple of `(doc_sha256, page, answer_span text)`. A retrieved chunk is deemed relevant if and only if:
+  1. It belongs to the designated document (matching `doc_sha256`) and page.
+  2. Its text contains the `answer_span` under case-insensitive whitespace-normalized substring matching.
+- **Consequences**: The evaluation benchmark is fully invariant to chunker settings, window sizes, and passage merging algorithms. Benchmarks remain durable across future ingestion iterations.
