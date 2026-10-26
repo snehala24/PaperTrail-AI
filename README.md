@@ -20,6 +20,33 @@ PaperTrail AI is **not** a generic "chat with PDFs" wrapper. It is built for res
 
 ---
 
+## 📅 Day 1 Status & Deliverables (Monday 26 Oct)
+
+All initial milestone goals for Day 1 have been achieved, verified with 34 automated unit tests, and committed on the `day1-scaffold` branch:
+
+- [x] **Repository Scaffolding**: Standardized package layout (`backend/app/{api,core,ingestion,retrieval,claims,citations,llm,eval,schemas}`, `backend/tests/`, `eval/`, `docs/`, `frontend/`), `.gitignore`, `.env.example`, and `pyproject.toml`.
+- [x] **Core Data Contracts (Pydantic v2)**:
+  - `Document`: SHA-256 validation, page counting, and extraction warnings tracking.
+  - `Chunk`: 1-indexed page boundaries, section heading awareness, and classification (`text`, `table`, `figure_ref`).
+  - `Claim`: Atomic statement representation.
+  - `EvidenceLink`: Grounded relationships with mandatory `conflict_reason` for apparent conflicts (`supports`, `weakens`, `contradicts`, `contextualizes`, `insufficient`).
+  - `CitationCheck`: Two-step citation validation (`exists` check followed by `supports` evaluation).
+  - `Answer`: Grounded synthesis model with mandatory `abstain_reason` upon honest abstention.
+- [x] **PDF Ingestion & FastAPI Endpoints**:
+  - `GET /health`: Service health and version status.
+  - `POST /documents`: Accepts research PDF uploads, extracts pages and structural blocks with PyMuPDF, records extraction warnings (never silently dropping failures), and returns `Document` metadata with chunk counts.
+- [x] **Evaluation Benchmark Scaffold**:
+  - `eval/benchmark_schema.json`: JSON Schema defining evaluation contracts.
+  - `eval/questions.jsonl`: 10 draft benchmark questions across categories (`factual`, `comparative`, `apparent_conflict`, `unanswerable`, `methodological`).
+  - `eval/gold_evidence.jsonl`: 10 draft gold evidence annotations linking questions to chunks and conflict rationales.
+- [x] **Architecture & Design Documentation**:
+  - `docs/architecture.md`: Pipeline topologies, Mermaid flowcharts, schema hierarchies, and citation validation sequence diagrams.
+  - `docs/decisions.md`: Architectural Decision Records (ADRs 001–005).
+  - `docs/limitations.md`: Known boundaries and parser edge cases.
+- [x] **Automated Test Suite**: 34 tests passing with 100% clean test execution (`pytest backend/tests`).
+
+---
+
 ## 📐 Architecture Pipeline
 
 ```text
