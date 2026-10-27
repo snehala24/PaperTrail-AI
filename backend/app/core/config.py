@@ -63,3 +63,15 @@ def get_gemini_model() -> str:
             "GEMINI_MODEL is not set in environment or .env. Please configure GEMINI_MODEL."
         )
     return settings.gemini_model
+
+
+def get_gemini_api_key() -> str:
+    """
+    Retrieve configured GEMINI_API_KEY.
+    Fails clearly if GEMINI_API_KEY is missing from environment.
+    """
+    if not settings.gemini_api_key:
+        raise ValueError(
+            "GEMINI_API_KEY is not set in environment or .env. Please configure GEMINI_API_KEY."
+        )
+    return settings.gemini_api_key

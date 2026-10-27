@@ -438,3 +438,178 @@ def test_hybrid_retriever_doc_id_filter_semantics(sample_chunks):
     res_non_matching = retriever.search("Transformer BLEU", doc_ids=["doc-nonexistent"])
     assert res_non_matching == []
     assert retriever.last_total_candidates == 0
+
+
+
+def test_get_methodological_context_deterministic_selection():
+    """Verify deterministic selection of bounded method context from the same document."""
+    from backend.app.retrieval.rerank import get_methodological_context
+
+    method_chunk = Chunk(
+        chunk_id="chk-m1",
+        doc_id="doc-xyz",
+        page=4,
+        section_heading="3. Methodology and Algorithmic Formulation",
+        text="We formulate the parameter allocation problem as an integer linear program solved via off-the-shelf solvers.",
+        kind=ChunkKind.TEXT,
+    )
+    eval_chunk = Chunk(
+        chunk_id="chk-e1",
+        doc_id="doc-xyz",
+        page=5,
+        section_heading="4. Evaluation and Implementation",
+        text="For the ILP search we use the Gurobi optimizer version 11.",
+        kind=ChunkKind.TEXT,
+    )
+    doc_chunks = [method_chunk, eval_chunk]
+
+    ctx = get_methodological_context(eval_chunk, doc_chunks=doc_chunks, max_context_chars=100)
+    assert ctx.startswith("\n[Method Context: 3. Methodology and Algorithmic Formulation - ")
+    assert "solved via off-the-shelf solvers." in ctx
+    # Non-evaluation chunk gets empty context
+    assert get_methodological_context(method_chunk, doc_chunks=doc_chunks) == ""
+
+
+def test_get_methodological_context_safeguards():
+    """Verify context isolation, skipping of tables/references, and malformed metadata resilience."""
+    from backend.app.retrieval.rerank import get_methodological_context
+
+    unrelated_method = Chunk(
+        chunk_id="chk-other-doc",
+        doc_id="doc-DIFFERENT",
+        page=1,
+        section_heading="3. Algorithm",
+        text="Unrelated algorithm details.",
+        kind=ChunkKind.TEXT,
+    )
+    table_chunk = Chunk(
+        chunk_id="chk-tbl",
+        doc_id="doc-xyz",
+        page=4,
+        section_heading="3. Architecture",
+        text="Table 1: Benchmark results on baseline models.",
+        kind=ChunkKind.TABLE,
+    )
+    ref_chunk = Chunk(
+        chunk_id="chk-ref",
+        doc_id="doc-xyz",
+        page=4,
+        section_heading="3. Architecture",
+        text="[1] References and bibliography.",
+        kind=ChunkKind.REFERENCES,
+    )
+    eval_chunk = Chunk(
+        chunk_id="chk-e2",
+        doc_id="doc-xyz",
+        page=5,
+        section_heading="5. Experimental Setup",
+        text="We run all experiments on an H200 GPU.",
+        kind=ChunkKind.TEXT,
+    )
+
+    # 1. Unrelated document chunks are never attached
+    doc_chunks_with_unrelated = [unrelated_method, eval_chunk]
+    assert get_methodological_context(eval_chunk, doc_chunks=doc_chunks_with_unrelated) == ""
+
+    # 2. Table and references chunks are skipped
+    doc_chunks_with_table_ref = [table_chunk, ref_chunk, eval_chunk]
+    assert get_methodological_context(eval_chunk, doc_chunks=doc_chunks_with_table_ref) == ""
+
+    # 3. Missing or empty metadata does not crash
+    eval_empty_heading = Chunk(
+        chunk_id="chk-e3",
+        doc_id="doc-xyz",
+        page=5,
+        section_heading=None,
+        text="Some text without heading.",
+        kind=ChunkKind.TEXT,
+    )
+    assert get_methodological_context(eval_empty_heading, doc_chunks=[]) == ""
+    assert get_methodological_context(eval_chunk, doc_chunks=[]) == ""
+    assert get_methodological_context(eval_chunk, doc_chunks=None) == ""
+
+
+def test_cross_encoder_reranker_preserves_identities_and_input_order():
+    """Verify that CrossEncoder receives [query, text + context] and preserves chunk identity."""
+    from backend.app.retrieval.rerank import CrossEncoderReranker
+
+    reranker = CrossEncoderReranker()
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [0.85, 0.42]
+    reranker._model = mock_model
+
+    c1 = Chunk(
+        chunk_id="chk-orig-1",
+        doc_id="doc-test",
+        page=7,
+        section_heading="4. Evaluation",
+        text="Original passage text 1.",
+        kind=ChunkKind.TEXT,
+    )
+    c2 = Chunk(
+        chunk_id="chk-orig-2",
+        doc_id="doc-test",
+        page=8,
+        section_heading="2. Theory",
+        text="Original passage text 2.",
+        kind=ChunkKind.TEXT,
+    )
+
+    query = "Which solver is used?"
+    results = reranker.rerank(query, [c1, c2], top_k=2)
+
+    # 1. Returned Chunk objects preserve exact identities and raw text
+    assert len(results) == 2
+    r_chunk_1, score_1, rank_1 = results[0]
+    assert r_chunk_1.chunk_id == "chk-orig-1"
+    assert r_chunk_1.doc_id == "doc-test"
+    assert r_chunk_1.page == 7
+    assert r_chunk_1.text == "Original passage text 1."
+    assert rank_1 == 1
+    assert score_1 == 0.85
+
+    # 2. Verify query-passage pair ordering passed to model.predict
+    assert mock_model.predict.called
+    pairs_passed = mock_model.predict.call_args[0][0]
+    assert len(pairs_passed) == 2
+    assert pairs_passed[0][0] == query  # Query is first element
+    assert pairs_passed[0][1].startswith("4. Evaluation\nOriginal passage text 1.")
+    assert pairs_passed[1][0] == query
+
+
+def test_q012_reranking_fix_reproduction():
+    """
+    End-to-end integration test:
+    Verify that Q-012 gold chunk doc_c67573ef50cc_p6_c2 reaches top 5 in hybrid search
+    with its original chunk_id, page, and exact quote preserved.
+    """
+    import json
+    from pathlib import Path
+    from backend.app.core.storage import storage as current_storage
+    from backend.app.schemas import Document
+    from backend.app.retrieval.hybrid import retriever
+
+    # Load corpus chunks from repository data into test storage if not present
+    chunks_path = Path("data/chunks/doc_c67573ef50cc_chunks.json")
+    doc_path = Path("data/documents/doc_c67573ef50cc.json")
+    if chunks_path.exists() and doc_path.exists():
+        with open(doc_path, "r", encoding="utf-8") as df:
+            doc = Document(**json.load(df))
+        with open(chunks_path, "r", encoding="utf-8") as cf:
+            chunks = [Chunk(**cd) for cd in json.load(cf)]
+        current_storage.save_document(doc, chunks, force_overwrite=True)
+        retriever.index_chunks(chunks)
+
+    query = "Which off-the-shelf solver does LEMS use for its allocation problem?"
+    results = retriever.search(query, top_k=5)
+
+    assert len(results) >= 3
+    top_5_ids = [r.chunk_id for r in results]
+    assert "doc_c67573ef50cc_p6_c2" in top_5_ids
+
+    # Find the gold chunk result
+    gold_result = next(r for r in results if r.chunk_id == "doc_c67573ef50cc_p6_c2")
+    assert gold_result.page == 6
+    assert gold_result.doc_id == "doc_c67573ef50cc"
+    assert "we use the Gurobi solver" in gold_result.text
+    assert gold_result.rerank_rank <= 5
