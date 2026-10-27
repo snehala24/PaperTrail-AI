@@ -6,6 +6,32 @@ from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.rerank import CrossEncoderReranker
 
 
+def select_allowed_candidates(
+    raw_results: List[Tuple[Chunk, float, int]],
+    max_candidates: int,
+    include_references: bool = False,
+    doc_ids: Optional[Set[str]] = None,
+    raw_depth: Optional[int] = None,
+) -> List[Tuple[Chunk, float, int]]:
+    """
+    Select allowed candidates from raw retrieval results up to raw_depth (default: max_candidates * 2),
+    filtering out references (if include_references is False) and restricted doc_ids,
+    preserving original retrieval ranks, and capping at max_candidates.
+    """
+    if raw_depth is None:
+        raw_depth = max_candidates * 2
+    candidates: List[Tuple[Chunk, float, int]] = []
+    for chunk, score, rank in raw_results[:raw_depth]:
+        if not include_references and chunk.kind == ChunkKind.REFERENCES:
+            continue
+        if doc_ids is not None and chunk.doc_id not in doc_ids:
+            continue
+        candidates.append((chunk, score, rank))
+        if len(candidates) >= max_candidates:
+            break
+    return candidates
+
+
 class HybridRetriever:
     """
     Hybrid retriever combining BM25 lexical search and FAISS dense vector search
@@ -53,23 +79,36 @@ class HybridRetriever:
             import os
             candidate_pool_size = int(os.environ.get("RERANK_POOL", "30"))
 
-        doc_filter_set: Optional[Set[str]] = set(doc_ids) if doc_ids else None
+        doc_filter_set: Optional[Set[str]] = set(doc_ids) if doc_ids is not None else None
+        if doc_filter_set is not None and len(doc_filter_set) == 0:
+            self.last_total_candidates = 0
+            return []
 
         def is_allowed(chunk: Chunk) -> bool:
             if not include_references and chunk.kind == ChunkKind.REFERENCES:
                 return False
-            if doc_filter_set and chunk.doc_id not in doc_filter_set:
+            if doc_filter_set is not None and chunk.doc_id not in doc_filter_set:
                 return False
             return True
 
-        # Stage 1: BM25 retrieval
+        # Stage 1: BM25 retrieval (contribute top candidate_pool_size allowed candidates)
         bm25_raw = self.bm25.search(query, top_k=candidate_pool_size * 2)
-        bm25_results = [(c, score, rank) for c, score, rank in bm25_raw if is_allowed(c)]
+        bm25_results = select_allowed_candidates(
+            bm25_raw,
+            max_candidates=candidate_pool_size,
+            include_references=include_references,
+            doc_ids=doc_filter_set,
+        )
         bm25_dict = {c.chunk_id: (score, rank) for c, score, rank in bm25_results}
 
-        # Stage 2: Dense retrieval
+        # Stage 2: Dense retrieval (contribute top candidate_pool_size allowed candidates)
         dense_raw = self.dense.search(query, top_k=candidate_pool_size * 2)
-        dense_results = [(c, score, rank) for c, score, rank in dense_raw if is_allowed(c)]
+        dense_results = select_allowed_candidates(
+            dense_raw,
+            max_candidates=candidate_pool_size,
+            include_references=include_references,
+            doc_ids=doc_filter_set,
+        )
         dense_dict = {c.chunk_id: (score, rank) for c, score, rank in dense_results}
 
         # Format rankings for RRF
@@ -151,3 +190,21 @@ class _LazyRetrieverProxy:
 
 
 retriever = _LazyRetrieverProxy()
+
+
+def ensure_retriever_indexed(force: bool = False) -> int:
+    """
+    Ensure the global retriever has loaded all chunks from persistent storage.
+    If the retriever is already indexed and force is False, does not re-index.
+    Returns the number of chunks indexed.
+    """
+    if not force and bool(retriever.chunks_by_id):
+        return len(retriever.chunks_by_id)
+
+    from backend.app.core.storage import storage
+
+    all_chunks = storage.get_all_chunks()
+    if all_chunks:
+        retriever.index_chunks(all_chunks)
+        return len(all_chunks)
+    return 0

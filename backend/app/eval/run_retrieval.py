@@ -22,6 +22,7 @@ from backend.app.retrieval.bm25 import BM25Index
 from backend.app.retrieval.dense import DenseIndex
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.rerank import CrossEncoderReranker
+from backend.app.retrieval.hybrid import select_allowed_candidates
 from backend.app.eval.metrics import compute_retrieval_metrics, bootstrap_ci_95, is_gold_match
 
 # Configurable candidate-pool size passed from fusion to cross-encoder (default 30)
@@ -148,6 +149,28 @@ def aggregate_metrics_for_subset(
     }
 
 
+def build_eval_rrf_pool(
+    bm25_raw: List[Tuple[Chunk, float, int]],
+    dense_raw: List[Tuple[Chunk, float, int]],
+    chunk_map: Dict[str, Chunk],
+    pool_size: int = RERANK_POOL,
+) -> Tuple[List[Chunk], List[Chunk]]:
+    """
+    Build fused candidate pools for evaluation from raw BM25 and dense retrieval results.
+    Uses select_allowed_candidates to filter and cap each modality to pool_size candidates.
+    Returns:
+        (fused_chunks_all, fused_pool_chunks)
+    """
+    bm25_candidates = select_allowed_candidates(bm25_raw, max_candidates=pool_size)
+    dense_candidates = select_allowed_candidates(dense_raw, max_candidates=pool_size)
+    bm25_ranks_for_fusion = [(c.chunk_id, r) for c, _, r in bm25_candidates]
+    dense_ranks_for_fusion = [(c.chunk_id, r) for c, _, r in dense_candidates]
+    fused = reciprocal_rank_fusion([bm25_ranks_for_fusion, dense_ranks_for_fusion], k=60)
+    fused_chunks_all = [chunk_map[cid] for cid, _ in fused if cid in chunk_map]
+    fused_pool_chunks = fused_chunks_all[:pool_size]
+    return fused_chunks_all, fused_pool_chunks
+
+
 def run_retrieval_eval() -> Dict[str, Any]:
     """
     Execute single-pass retrieval across configurations and record timestamped run log.
@@ -177,8 +200,8 @@ def run_retrieval_eval() -> Dict[str, Any]:
     configs = ["bm25", "dense", "hybrid_rrf", "hybrid_rerank"]
     k_list = [1, 3, 5, 10]
 
-    # Search depth: pull up to max(RERANK_POOL, 50) for failure tracking
-    search_depth = max(RERANK_POOL, 50)
+    # Search depth: pull up to max(RERANK_POOL * 2, 50) for failure tracking and 2x candidate pool buffer
+    search_depth = max(RERANK_POOL * 2, 50)
 
     per_q_eval: Dict[str, Dict[str, Any]] = {}
     failure_analysis: List[Dict[str, Any]] = []
@@ -208,17 +231,13 @@ def run_retrieval_eval() -> Dict[str, Any]:
         dense_raw = dense.search(q.question, top_k=search_depth)
         dense_chunks = [c for c, _, _ in dense_raw if c.kind != ChunkKind.REFERENCES]
 
-        # 3. Hybrid RRF Search (fuse BM25 top 30 + Dense top 30)
-        bm25_ranks_for_fusion = [(c.chunk_id, r) for c, _, r in bm25_raw[:RERANK_POOL] if c.kind != ChunkKind.REFERENCES]
-        dense_ranks_for_fusion = [(c.chunk_id, r) for c, _, r in dense_raw[:RERANK_POOL] if c.kind != ChunkKind.REFERENCES]
-        fused = reciprocal_rank_fusion([bm25_ranks_for_fusion, dense_ranks_for_fusion], k=60)
-        fused_pool_chunks = [chunk_map[cid] for cid, _ in fused if cid in chunk_map][:RERANK_POOL]
-
-        # Full RRF ranking across all candidates for rank tracking up to 50
-        bm25_all_ranks = [(c.chunk_id, r) for c, _, r in bm25_raw if c.kind != ChunkKind.REFERENCES]
-        dense_all_ranks = [(c.chunk_id, r) for c, _, r in dense_raw if c.kind != ChunkKind.REFERENCES]
-        fused_full = reciprocal_rank_fusion([bm25_all_ranks, dense_all_ranks], k=60)
-        fused_all_chunks = [chunk_map[cid] for cid, _ in fused_full if cid in chunk_map][:50]
+        # 3. Hybrid RRF Search (fuse BM25 top 30 + Dense top 30 allowed candidates)
+        fused_chunks_all, fused_pool_chunks = build_eval_rrf_pool(
+            bm25_raw=bm25_raw,
+            dense_raw=dense_raw,
+            chunk_map=chunk_map,
+            pool_size=RERANK_POOL,
+        )
 
         # 4. Cross-Encoder Rerank (rerank whole fused candidate pool of size RERANK_POOL)
         reranked = reranker.rerank(q.question, fused_pool_chunks, top_k=RERANK_POOL)
@@ -244,7 +263,7 @@ def run_retrieval_eval() -> Dict[str, Any]:
         # Track first relevant rank and Top-1 chunk for failure analysis
         bm25_rel_rank = get_first_relevant_rank(bm25_chunks, active_golds)
         dense_rel_rank = get_first_relevant_rank(dense_chunks, active_golds)
-        rrf_rel_rank = get_first_relevant_rank(fused_all_chunks, active_golds)
+        rrf_rel_rank = get_first_relevant_rank(fused_chunks_all, active_golds)
         rerank_rel_rank = get_first_relevant_rank(rerank_chunks, active_golds)
 
         def get_top1_info(chunk_list: List[Chunk]) -> Dict[str, Any]:
@@ -296,7 +315,7 @@ def run_retrieval_eval() -> Dict[str, Any]:
 
     # Identify Recall@5 failures (first relevant rank > 5 or not found)
     human_analysis = [qa for qa in failure_analysis if qa["question_id"].startswith("Q-01") or qa["question_id"].startswith("Q-02")]
-    
+
     def is_fail(rank_val: Any) -> bool:
         if isinstance(rank_val, int):
             return rank_val > 5

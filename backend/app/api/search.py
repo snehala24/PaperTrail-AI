@@ -1,7 +1,7 @@
 import re
 from fastapi import APIRouter, HTTPException, status
 from backend.app.schemas import SearchRequest, SearchResponse
-from backend.app.retrieval.hybrid import retriever
+from backend.app.retrieval.hybrid import retriever, ensure_retriever_indexed
 
 router = APIRouter(prefix="/search", tags=["Search"])
 
@@ -22,6 +22,9 @@ def search_corpus(req: SearchRequest) -> SearchResponse:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid doc_id in filter: {did}. Expected format '^doc_[0-9a-f]{{12}}$'.",
                 )
+
+    if not retriever.chunks_by_id:
+        ensure_retriever_indexed()
 
     results = retriever.search(
         query=req.query,
