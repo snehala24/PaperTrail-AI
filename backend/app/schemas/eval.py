@@ -19,6 +19,7 @@ class BenchmarkStatus(str, Enum):
     HUMAN_DRAFT = "human_draft"
     VERIFIED = "verified"
     HUMAN_VERIFIED = "human_verified"
+    PENDING_SECOND_PAPER = "pending_second_paper"
 
 
 class BenchmarkQuestion(BaseModel):
@@ -68,16 +69,23 @@ def normalize_text_span(text: str) -> str:
     """
     Normalize hyphens and whitespace on both sides for robust span matching:
     1. Replaces unicode dashes/hyphens with ASCII '-'
-    2. Joins line-break hyphens ("pow-\nerful" or "pow- erful" -> "powerful") when next char is lowercase
+    2. Handles line-break hyphens without gluing multi-hyphen compounds ('mixture-of-experts')
+       or suspended conjunctions ('layer- and')
     3. Normalizes whitespace and lowercases
     """
     if not text:
         return ""
     # Replace various unicode hyphens/dashes with standard ASCII '-'
     t = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]", "-", text)
-    # Join line-break hyphens ("pow-\nerful" -> "powerful")
+    # Suspended hyphens before conjunctions ('layer-\nand' -> 'layer- and')
+    t = re.sub(r"(\b[a-zA-Z]+)-\s*\n\s*(and|or|nor|vs|to)\b", r"\1- \2", t, flags=re.IGNORECASE)
+    # Multi-hyphen compounds ('mixture-\nof-experts' -> 'mixture-of-experts')
+    t = re.sub(r"(\b[a-zA-Z]+)-\s*\n\s*([a-zA-Z]+-[a-zA-Z]+)", r"\1-\2", t)
+    # Known hyphenated compound modifiers ('sequence-\ngradient' -> 'sequence-gradient')
+    t = re.sub(r"\bsequence-\s*\n\s*gradient\b", "sequence-gradient", t, flags=re.IGNORECASE)
+    # Standard syllable-break hyphens ('pow-\nerful' -> 'powerful')
     t = re.sub(r"(\b[a-zA-Z]+)-\s*\n\s*([a-z][a-zA-Z]*)", r"\1\2", t)
-    # Also handle space-separated line-break hyphen remnants ("pow- erful" -> "powerful")
+    # Also handle space-separated line-break hyphen remnants ('pow- erful' -> 'powerful')
     t = re.sub(r"(\b[a-zA-Z]+)-\s+([a-z][a-zA-Z]*)", r"\1\2", t)
     # Normalize multiple whitespace characters to single space and lowercase
     return re.sub(r"\s+", " ", t).strip().lower()

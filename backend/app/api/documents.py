@@ -5,7 +5,7 @@ from backend.app.schemas import Document, Chunk, DocumentUploadResponse, CHUNKER
 from backend.app.ingestion.parser import parse_pdf_bytes, calculate_sha256
 from backend.app.core.storage import storage
 from backend.app.core.config import settings
-from backend.app.retrieval.hybrid import retriever
+from backend.app.retrieval.hybrid import retriever, ensure_retriever_indexed
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -75,6 +75,8 @@ def upload_document(file: UploadFile = File(...)) -> DocumentUploadResponse:
     existing_doc = storage.get_document_by_sha256(sha256)
     if existing_doc and getattr(existing_doc, "chunker_version", None) == CHUNKER_VERSION:
         existing_chunks = storage.get_chunks(existing_doc.doc_id)
+        # Ensure retriever is indexed if it was uninitialized
+        ensure_retriever_indexed()
         return DocumentUploadResponse(
             document=existing_doc,
             chunk_count=len(existing_chunks),

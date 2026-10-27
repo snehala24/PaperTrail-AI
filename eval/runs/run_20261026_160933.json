@@ -1,0 +1,1649 @@
+{
+  "run_id": "run_20261026_160933",
+  "timestamp": "2026-10-26T16:09:33.452043+00:00",
+  "git_commit": "cd8f99d71e8cf381345e81cbefe4d2b4e58d5a7a",
+  "candidate_pool_size": 30,
+  "models": {
+    "embedding_model": "all-MiniLM-L6-v2",
+    "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  },
+  "chunker_settings": {
+    "min_chars": 800,
+    "max_chars": 1500,
+    "max_table_chars": 2500
+  },
+  "total_corpus_chunks": 131,
+  "total_questions": 30,
+  "human_labeled": {
+    "n_total": 18,
+    "n_answerable_evaluated": 15,
+    "n_unanswerable_reserved": 3,
+    "statistical_warning": "Sample size (n=15) too small for statistical significance (n < 30).",
+    "overall_metrics_by_config": {
+      "bm25": {
+        "mrr": 0.6176,
+        "precision@1": 0.4667,
+        "recall@1": 0.3667,
+        "ndcg@1": 0.4667,
+        "precision@3": 0.2889,
+        "recall@3": 0.6667,
+        "ndcg@3": 0.5625,
+        "precision@5": 0.2,
+        "recall@5": 0.7333,
+        "ndcg@5": 0.5977,
+        "precision@10": 0.1133,
+        "recall@10": 0.8667,
+        "ndcg@10": 0.641
+      },
+      "dense": {
+        "mrr": 0.594,
+        "precision@1": 0.5333,
+        "recall@1": 0.4333,
+        "ndcg@1": 0.5333,
+        "precision@3": 0.2667,
+        "recall@3": 0.6,
+        "ndcg@3": 0.5442,
+        "precision@5": 0.16,
+        "recall@5": 0.6,
+        "ndcg@5": 0.5442,
+        "precision@10": 0.0867,
+        "recall@10": 0.6333,
+        "ndcg@10": 0.5579
+      },
+      "hybrid_rrf": {
+        "mrr": 0.6509,
+        "precision@1": 0.6,
+        "recall@1": 0.4667,
+        "ndcg@1": 0.6,
+        "precision@3": 0.2889,
+        "recall@3": 0.6333,
+        "ndcg@3": 0.5764,
+        "precision@5": 0.1867,
+        "recall@5": 0.6667,
+        "ndcg@5": 0.5922,
+        "precision@10": 0.1,
+        "recall@10": 0.7333,
+        "ndcg@10": 0.6115
+      },
+      "hybrid_rerank": {
+        "mrr": 0.761,
+        "precision@1": 0.6667,
+        "recall@1": 0.5333,
+        "ndcg@1": 0.6667,
+        "precision@3": 0.3778,
+        "recall@3": 0.8667,
+        "ndcg@3": 0.7389,
+        "precision@5": 0.24,
+        "recall@5": 0.9333,
+        "ndcg@5": 0.7647,
+        "precision@10": 0.12,
+        "recall@10": 0.9333,
+        "ndcg@10": 0.7647
+      }
+    },
+    "confidence_intervals_95": {
+      "bm25": {
+        "recall@5_ci95": [
+          0.5333,
+          0.9333
+        ],
+        "mrr_ci95": [
+          0.4308,
+          0.8032
+        ]
+      },
+      "dense": {
+        "recall@5_ci95": [
+          0.3667,
+          0.8
+        ],
+        "mrr_ci95": [
+          0.369,
+          0.8032
+        ]
+      },
+      "hybrid_rrf": {
+        "recall@5_ci95": [
+          0.4,
+          0.8667
+        ],
+        "mrr_ci95": [
+          0.4207,
+          0.8511
+        ]
+      },
+      "hybrid_rerank": {
+        "recall@5_ci95": [
+          0.8,
+          1.0
+        ],
+        "mrr_ci95": [
+          0.5822,
+          0.9222
+        ]
+      }
+    },
+    "breakdown_by_question_type": {
+      "factual": {
+        "bm25": {
+          "mrr": 0.3277,
+          "precision@1": 0.2,
+          "recall@1": 0.2,
+          "ndcg@1": 0.2,
+          "precision@3": 0.1333,
+          "recall@3": 0.4,
+          "ndcg@3": 0.3,
+          "precision@5": 0.08,
+          "recall@5": 0.4,
+          "ndcg@5": 0.3,
+          "precision@10": 0.06,
+          "recall@10": 0.6,
+          "ndcg@10": 0.3667
+        },
+        "dense": {
+          "mrr": 0.4095,
+          "precision@1": 0.4,
+          "recall@1": 0.4,
+          "ndcg@1": 0.4,
+          "precision@3": 0.1333,
+          "recall@3": 0.4,
+          "ndcg@3": 0.4,
+          "precision@5": 0.08,
+          "recall@5": 0.4,
+          "ndcg@5": 0.4,
+          "precision@10": 0.04,
+          "recall@10": 0.4,
+          "ndcg@10": 0.4
+        },
+        "hybrid_rrf": {
+          "mrr": 0.3184,
+          "precision@1": 0.2,
+          "recall@1": 0.2,
+          "ndcg@1": 0.2,
+          "precision@3": 0.1333,
+          "recall@3": 0.4,
+          "ndcg@3": 0.3,
+          "precision@5": 0.08,
+          "recall@5": 0.4,
+          "ndcg@5": 0.3,
+          "precision@10": 0.04,
+          "recall@10": 0.4,
+          "ndcg@10": 0.3
+        },
+        "hybrid_rerank": {
+          "mrr": 0.7095,
+          "precision@1": 0.6,
+          "recall@1": 0.6,
+          "ndcg@1": 0.6,
+          "precision@3": 0.2666,
+          "recall@3": 0.8,
+          "ndcg@3": 0.7262,
+          "precision@5": 0.16,
+          "recall@5": 0.8,
+          "ndcg@5": 0.7262,
+          "precision@10": 0.08,
+          "recall@10": 0.8,
+          "ndcg@10": 0.7262
+        }
+      },
+      "apparent_conflict": {
+        "bm25": {
+          "mrr": 0.75,
+          "precision@1": 0.5,
+          "recall@1": 0.25,
+          "ndcg@1": 0.5,
+          "precision@3": 0.5,
+          "recall@3": 1.0,
+          "ndcg@3": 0.6935,
+          "precision@5": 0.3,
+          "recall@5": 1.0,
+          "ndcg@5": 0.6935,
+          "precision@10": 0.15,
+          "recall@10": 1.0,
+          "ndcg@10": 0.6935
+        },
+        "dense": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.75,
+          "ndcg@1": 1.0,
+          "precision@3": 0.5,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.3,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.15,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rrf": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.75,
+          "ndcg@1": 1.0,
+          "precision@3": 0.5,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.3,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.15,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rerank": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.75,
+          "ndcg@1": 1.0,
+          "precision@3": 0.5,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.3,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.15,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        }
+      },
+      "methodological": {
+        "bm25": {
+          "mrr": 0.625,
+          "precision@1": 0.4,
+          "recall@1": 0.4,
+          "ndcg@1": 0.4,
+          "precision@3": 0.2666,
+          "recall@3": 0.7,
+          "ndcg@3": 0.6036,
+          "precision@5": 0.2,
+          "recall@5": 0.8,
+          "ndcg@5": 0.6564,
+          "precision@10": 0.12,
+          "recall@10": 1.0,
+          "ndcg@10": 0.7195
+        },
+        "dense": {
+          "mrr": 0.5725,
+          "precision@1": 0.4,
+          "recall@1": 0.4,
+          "ndcg@1": 0.4,
+          "precision@3": 0.2666,
+          "recall@3": 0.7,
+          "ndcg@3": 0.5875,
+          "precision@5": 0.16,
+          "recall@5": 0.7,
+          "ndcg@5": 0.5875,
+          "precision@10": 0.08,
+          "recall@10": 0.7,
+          "ndcg@10": 0.5875
+        },
+        "hybrid_rrf": {
+          "mrr": 0.8143,
+          "precision@1": 0.8,
+          "recall@1": 0.7,
+          "ndcg@1": 0.8,
+          "precision@3": 0.2666,
+          "recall@3": 0.7,
+          "ndcg@3": 0.7226,
+          "precision@5": 0.2,
+          "recall@5": 0.8,
+          "ndcg@5": 0.7701,
+          "precision@10": 0.1,
+          "recall@10": 0.8,
+          "ndcg@10": 0.7701
+        },
+        "hybrid_rerank": {
+          "mrr": 0.7333,
+          "precision@1": 0.6,
+          "recall@1": 0.5,
+          "ndcg@1": 0.6,
+          "precision@3": 0.4,
+          "recall@3": 1.0,
+          "ndcg@3": 0.7839,
+          "precision@5": 0.24,
+          "recall@5": 1.0,
+          "ndcg@5": 0.7839,
+          "precision@10": 0.12,
+          "recall@10": 1.0,
+          "ndcg@10": 0.7839
+        }
+      },
+      "comparative": {
+        "bm25": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.6667,
+          "ndcg@1": 1.0,
+          "precision@3": 0.4444,
+          "recall@3": 0.8333,
+          "ndcg@3": 0.8443,
+          "precision@5": 0.3333,
+          "recall@5": 1.0,
+          "ndcg@5": 0.9323,
+          "precision@10": 0.1667,
+          "recall@10": 1.0,
+          "ndcg@10": 0.9323
+        },
+        "dense": {
+          "mrr": 0.6667,
+          "precision@1": 0.6667,
+          "recall@1": 0.3333,
+          "ndcg@1": 0.6667,
+          "precision@3": 0.3333,
+          "recall@3": 0.5,
+          "ndcg@3": 0.5377,
+          "precision@5": 0.2,
+          "recall@5": 0.5,
+          "ndcg@5": 0.5377,
+          "precision@10": 0.1333,
+          "recall@10": 0.6667,
+          "ndcg@10": 0.6058
+        },
+        "hybrid_rrf": {
+          "mrr": 0.7,
+          "precision@1": 0.6667,
+          "recall@1": 0.3333,
+          "ndcg@1": 0.6667,
+          "precision@3": 0.4445,
+          "recall@3": 0.6667,
+          "ndcg@3": 0.6399,
+          "precision@5": 0.2667,
+          "recall@5": 0.6667,
+          "ndcg@5": 0.6399,
+          "precision@10": 0.1667,
+          "recall@10": 1.0,
+          "ndcg@10": 0.7363
+        },
+        "hybrid_rerank": {
+          "mrr": 0.7333,
+          "precision@1": 0.6667,
+          "recall@1": 0.3333,
+          "ndcg@1": 0.6667,
+          "precision@3": 0.4445,
+          "recall@3": 0.6667,
+          "ndcg@3": 0.6399,
+          "precision@5": 0.3333,
+          "recall@5": 1.0,
+          "ndcg@5": 0.7689,
+          "precision@10": 0.1667,
+          "recall@10": 1.0,
+          "ndcg@10": 0.7689
+        }
+      }
+    }
+  },
+  "ai_draft": {
+    "n_total": 10,
+    "n_answerable_evaluated": 8,
+    "n_unanswerable_reserved": 2,
+    "statistical_warning": "Sample size (n=8) too small for statistical significance (n < 30).",
+    "overall_metrics_by_config": {
+      "bm25": {
+        "mrr": 0.8163,
+        "precision@1": 0.75,
+        "recall@1": 0.75,
+        "ndcg@1": 0.75,
+        "precision@3": 0.2916,
+        "recall@3": 0.875,
+        "ndcg@3": 0.75,
+        "precision@5": 0.175,
+        "recall@5": 0.875,
+        "ndcg@5": 0.75,
+        "precision@10": 0.0875,
+        "recall@10": 0.875,
+        "ndcg@10": 0.75
+      },
+      "dense": {
+        "mrr": 0.6911,
+        "precision@1": 0.625,
+        "recall@1": 0.625,
+        "ndcg@1": 0.625,
+        "precision@3": 0.25,
+        "recall@3": 0.75,
+        "ndcg@3": 0.5908,
+        "precision@5": 0.15,
+        "recall@5": 0.75,
+        "ndcg@5": 0.5908,
+        "precision@10": 0.0875,
+        "recall@10": 0.875,
+        "ndcg@10": 0.6324
+      },
+      "hybrid_rrf": {
+        "mrr": 0.7917,
+        "precision@1": 0.75,
+        "recall@1": 0.75,
+        "ndcg@1": 0.75,
+        "precision@3": 0.2916,
+        "recall@3": 0.875,
+        "ndcg@3": 0.7158,
+        "precision@5": 0.175,
+        "recall@5": 0.875,
+        "ndcg@5": 0.7158,
+        "precision@10": 0.0875,
+        "recall@10": 0.875,
+        "ndcg@10": 0.7158
+      },
+      "hybrid_rerank": {
+        "mrr": 0.6354,
+        "precision@1": 0.5,
+        "recall@1": 0.5,
+        "ndcg@1": 0.5,
+        "precision@3": 0.25,
+        "recall@3": 0.75,
+        "ndcg@3": 0.5625,
+        "precision@5": 0.175,
+        "recall@5": 0.875,
+        "ndcg@5": 0.6163,
+        "precision@10": 0.0875,
+        "recall@10": 0.875,
+        "ndcg@10": 0.6163
+      }
+    },
+    "confidence_intervals_95": {
+      "bm25": {
+        "recall@5_ci95": [
+          0.625,
+          1.0
+        ],
+        "mrr_ci95": [
+          0.5152,
+          1.0
+        ]
+      },
+      "dense": {
+        "recall@5_ci95": [
+          0.375,
+          1.0
+        ],
+        "mrr_ci95": [
+          0.3822,
+          0.9167
+        ]
+      },
+      "hybrid_rrf": {
+        "recall@5_ci95": [
+          0.625,
+          1.0
+        ],
+        "mrr_ci95": [
+          0.5,
+          1.0
+        ]
+      },
+      "hybrid_rerank": {
+        "recall@5_ci95": [
+          0.625,
+          1.0
+        ],
+        "mrr_ci95": [
+          0.375,
+          0.875
+        ]
+      }
+    },
+    "breakdown_by_question_type": {
+      "factual": {
+        "bm25": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 1.0,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 1.0,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 1.0
+        },
+        "dense": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 1.0,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 1.0,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 1.0
+        },
+        "hybrid_rrf": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 1.0,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 1.0,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 1.0
+        },
+        "hybrid_rerank": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 1.0,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 1.0,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 1.0
+        }
+      },
+      "comparative": {
+        "bm25": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "dense": {
+          "mrr": 0.6667,
+          "precision@1": 0.5,
+          "recall@1": 0.5,
+          "ndcg@1": 0.5,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.5565,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.5565,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.5565
+        },
+        "hybrid_rrf": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rerank": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        }
+      },
+      "apparent_conflict": {
+        "bm25": {
+          "mrr": 0.75,
+          "precision@1": 0.5,
+          "recall@1": 0.5,
+          "ndcg@1": 0.5,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.6935,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.6935,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.6935
+        },
+        "dense": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rrf": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 1.0,
+          "ndcg@1": 1.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rerank": {
+          "mrr": 0.4167,
+          "precision@1": 0.0,
+          "recall@1": 0.0,
+          "ndcg@1": 0.0,
+          "precision@3": 0.3333,
+          "recall@3": 1.0,
+          "ndcg@3": 0.4435,
+          "precision@5": 0.2,
+          "recall@5": 1.0,
+          "ndcg@5": 0.4435,
+          "precision@10": 0.1,
+          "recall@10": 1.0,
+          "ndcg@10": 0.4435
+        }
+      },
+      "methodological": {
+        "bm25": {
+          "mrr": 0.5152,
+          "precision@1": 0.5,
+          "recall@1": 0.5,
+          "ndcg@1": 0.5,
+          "precision@3": 0.1666,
+          "recall@3": 0.5,
+          "ndcg@3": 0.5,
+          "precision@5": 0.1,
+          "recall@5": 0.5,
+          "ndcg@5": 0.5,
+          "precision@10": 0.05,
+          "recall@10": 0.5,
+          "ndcg@10": 0.5
+        },
+        "dense": {
+          "mrr": 0.0977,
+          "precision@1": 0.0,
+          "recall@1": 0.0,
+          "ndcg@1": 0.0,
+          "precision@3": 0.0,
+          "recall@3": 0.0,
+          "ndcg@3": 0.0,
+          "precision@5": 0.0,
+          "recall@5": 0.0,
+          "ndcg@5": 0.0,
+          "precision@10": 0.05,
+          "recall@10": 0.5,
+          "ndcg@10": 0.1666
+        },
+        "hybrid_rrf": {
+          "mrr": 0.1667,
+          "precision@1": 0.0,
+          "recall@1": 0.0,
+          "ndcg@1": 0.0,
+          "precision@3": 0.1666,
+          "recall@3": 0.5,
+          "ndcg@3": 0.25,
+          "precision@5": 0.1,
+          "recall@5": 0.5,
+          "ndcg@5": 0.25,
+          "precision@10": 0.05,
+          "recall@10": 0.5,
+          "ndcg@10": 0.25
+        },
+        "hybrid_rerank": {
+          "mrr": 0.125,
+          "precision@1": 0.0,
+          "recall@1": 0.0,
+          "ndcg@1": 0.0,
+          "precision@3": 0.0,
+          "recall@3": 0.0,
+          "ndcg@3": 0.0,
+          "precision@5": 0.1,
+          "recall@5": 0.5,
+          "ndcg@5": 0.2154,
+          "precision@10": 0.05,
+          "recall@10": 0.5,
+          "ndcg@10": 0.2154
+        }
+      }
+    }
+  },
+  "combined": {
+    "n_total": 28,
+    "n_answerable_evaluated": 23,
+    "n_unanswerable_reserved": 5,
+    "statistical_warning": "Sample size (n=23) too small for statistical significance (n < 30).",
+    "overall_metrics_by_config": {
+      "bm25": {
+        "mrr": 0.6867,
+        "precision@1": 0.5652,
+        "recall@1": 0.5,
+        "ndcg@1": 0.5652,
+        "precision@3": 0.2898,
+        "recall@3": 0.7391,
+        "ndcg@3": 0.6277,
+        "precision@5": 0.1913,
+        "recall@5": 0.7826,
+        "ndcg@5": 0.6507,
+        "precision@10": 0.1043,
+        "recall@10": 0.8696,
+        "ndcg@10": 0.6789
+      },
+      "dense": {
+        "mrr": 0.6278,
+        "precision@1": 0.5652,
+        "recall@1": 0.5,
+        "ndcg@1": 0.5652,
+        "precision@3": 0.2609,
+        "recall@3": 0.6522,
+        "ndcg@3": 0.5604,
+        "precision@5": 0.1565,
+        "recall@5": 0.6522,
+        "ndcg@5": 0.5604,
+        "precision@10": 0.087,
+        "recall@10": 0.7174,
+        "ndcg@10": 0.5838
+      },
+      "hybrid_rrf": {
+        "mrr": 0.6999,
+        "precision@1": 0.6522,
+        "recall@1": 0.5652,
+        "ndcg@1": 0.6522,
+        "precision@3": 0.2898,
+        "recall@3": 0.7174,
+        "ndcg@3": 0.6249,
+        "precision@5": 0.1826,
+        "recall@5": 0.7391,
+        "ndcg@5": 0.6352,
+        "precision@10": 0.0957,
+        "recall@10": 0.7826,
+        "ndcg@10": 0.6478
+      },
+      "hybrid_rerank": {
+        "mrr": 0.7173,
+        "precision@1": 0.6087,
+        "recall@1": 0.5217,
+        "ndcg@1": 0.6087,
+        "precision@3": 0.3333,
+        "recall@3": 0.8261,
+        "ndcg@3": 0.6775,
+        "precision@5": 0.2174,
+        "recall@5": 0.913,
+        "ndcg@5": 0.7131,
+        "precision@10": 0.1087,
+        "recall@10": 0.913,
+        "ndcg@10": 0.7131
+      }
+    },
+    "confidence_intervals_95": {
+      "bm25": {
+        "recall@5_ci95": [
+          0.6087,
+          0.9565
+        ],
+        "mrr_ci95": [
+          0.5285,
+          0.8572
+        ]
+      },
+      "dense": {
+        "recall@5_ci95": [
+          0.4783,
+          0.8261
+        ],
+        "mrr_ci95": [
+          0.4499,
+          0.8005
+        ]
+      },
+      "hybrid_rrf": {
+        "recall@5_ci95": [
+          0.5652,
+          0.913
+        ],
+        "mrr_ci95": [
+          0.5326,
+          0.8618
+        ]
+      },
+      "hybrid_rerank": {
+        "recall@5_ci95": [
+          0.7826,
+          1.0
+        ],
+        "mrr_ci95": [
+          0.5593,
+          0.8696
+        ]
+      }
+    },
+    "breakdown_by_question_type": {
+      "factual": {
+        "bm25": {
+          "mrr": 0.5198,
+          "precision@1": 0.4286,
+          "recall@1": 0.4286,
+          "ndcg@1": 0.4286,
+          "precision@3": 0.1905,
+          "recall@3": 0.5714,
+          "ndcg@3": 0.5,
+          "precision@5": 0.1143,
+          "recall@5": 0.5714,
+          "ndcg@5": 0.5,
+          "precision@10": 0.0714,
+          "recall@10": 0.7143,
+          "ndcg@10": 0.5476
+        },
+        "dense": {
+          "mrr": 0.5782,
+          "precision@1": 0.5714,
+          "recall@1": 0.5714,
+          "ndcg@1": 0.5714,
+          "precision@3": 0.1905,
+          "recall@3": 0.5714,
+          "ndcg@3": 0.5714,
+          "precision@5": 0.1143,
+          "recall@5": 0.5714,
+          "ndcg@5": 0.5714,
+          "precision@10": 0.0571,
+          "recall@10": 0.5714,
+          "ndcg@10": 0.5714
+        },
+        "hybrid_rrf": {
+          "mrr": 0.5132,
+          "precision@1": 0.4286,
+          "recall@1": 0.4286,
+          "ndcg@1": 0.4286,
+          "precision@3": 0.1905,
+          "recall@3": 0.5714,
+          "ndcg@3": 0.5,
+          "precision@5": 0.1143,
+          "recall@5": 0.5714,
+          "ndcg@5": 0.5,
+          "precision@10": 0.0571,
+          "recall@10": 0.5714,
+          "ndcg@10": 0.5
+        },
+        "hybrid_rerank": {
+          "mrr": 0.7925,
+          "precision@1": 0.7143,
+          "recall@1": 0.7143,
+          "ndcg@1": 0.7143,
+          "precision@3": 0.2857,
+          "recall@3": 0.8571,
+          "ndcg@3": 0.8044,
+          "precision@5": 0.1714,
+          "recall@5": 0.8571,
+          "ndcg@5": 0.8044,
+          "precision@10": 0.0857,
+          "recall@10": 0.8571,
+          "ndcg@10": 0.8044
+        }
+      },
+      "apparent_conflict": {
+        "bm25": {
+          "mrr": 0.75,
+          "precision@1": 0.5,
+          "recall@1": 0.375,
+          "ndcg@1": 0.5,
+          "precision@3": 0.4166,
+          "recall@3": 1.0,
+          "ndcg@3": 0.6935,
+          "precision@5": 0.25,
+          "recall@5": 1.0,
+          "ndcg@5": 0.6935,
+          "precision@10": 0.125,
+          "recall@10": 1.0,
+          "ndcg@10": 0.6935
+        },
+        "dense": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.875,
+          "ndcg@1": 1.0,
+          "precision@3": 0.4166,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.25,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.125,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rrf": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.875,
+          "ndcg@1": 1.0,
+          "precision@3": 0.4166,
+          "recall@3": 1.0,
+          "ndcg@3": 0.8065,
+          "precision@5": 0.25,
+          "recall@5": 1.0,
+          "ndcg@5": 0.8065,
+          "precision@10": 0.125,
+          "recall@10": 1.0,
+          "ndcg@10": 0.8065
+        },
+        "hybrid_rerank": {
+          "mrr": 0.7083,
+          "precision@1": 0.5,
+          "recall@1": 0.375,
+          "ndcg@1": 0.5,
+          "precision@3": 0.4166,
+          "recall@3": 1.0,
+          "ndcg@3": 0.625,
+          "precision@5": 0.25,
+          "recall@5": 1.0,
+          "ndcg@5": 0.625,
+          "precision@10": 0.125,
+          "recall@10": 1.0,
+          "ndcg@10": 0.625
+        }
+      },
+      "methodological": {
+        "bm25": {
+          "mrr": 0.5936,
+          "precision@1": 0.4286,
+          "recall@1": 0.4286,
+          "ndcg@1": 0.4286,
+          "precision@3": 0.2381,
+          "recall@3": 0.6429,
+          "ndcg@3": 0.574,
+          "precision@5": 0.1714,
+          "recall@5": 0.7143,
+          "ndcg@5": 0.6117,
+          "precision@10": 0.1,
+          "recall@10": 0.8571,
+          "ndcg@10": 0.6568
+        },
+        "dense": {
+          "mrr": 0.4369,
+          "precision@1": 0.2857,
+          "recall@1": 0.2857,
+          "ndcg@1": 0.2857,
+          "precision@3": 0.1905,
+          "recall@3": 0.5,
+          "ndcg@3": 0.4196,
+          "precision@5": 0.1143,
+          "recall@5": 0.5,
+          "ndcg@5": 0.4196,
+          "precision@10": 0.0714,
+          "recall@10": 0.6429,
+          "ndcg@10": 0.4673
+        },
+        "hybrid_rrf": {
+          "mrr": 0.6293,
+          "precision@1": 0.5714,
+          "recall@1": 0.5,
+          "ndcg@1": 0.5714,
+          "precision@3": 0.2381,
+          "recall@3": 0.6429,
+          "ndcg@3": 0.5876,
+          "precision@5": 0.1714,
+          "recall@5": 0.7143,
+          "ndcg@5": 0.6215,
+          "precision@10": 0.0857,
+          "recall@10": 0.7143,
+          "ndcg@10": 0.6215
+        },
+        "hybrid_rerank": {
+          "mrr": 0.5595,
+          "precision@1": 0.4286,
+          "recall@1": 0.3571,
+          "ndcg@1": 0.4286,
+          "precision@3": 0.2857,
+          "recall@3": 0.7143,
+          "ndcg@3": 0.56,
+          "precision@5": 0.2,
+          "recall@5": 0.8571,
+          "ndcg@5": 0.6215,
+          "precision@10": 0.1,
+          "recall@10": 0.8571,
+          "ndcg@10": 0.6215
+        }
+      },
+      "comparative": {
+        "bm25": {
+          "mrr": 1.0,
+          "precision@1": 1.0,
+          "recall@1": 0.8,
+          "ndcg@1": 1.0,
+          "precision@3": 0.4,
+          "recall@3": 0.9,
+          "ndcg@3": 0.8292,
+          "precision@5": 0.28,
+          "recall@5": 1.0,
+          "ndcg@5": 0.882,
+          "precision@10": 0.14,
+          "recall@10": 1.0,
+          "ndcg@10": 0.882
+        },
+        "dense": {
+          "mrr": 0.6667,
+          "precision@1": 0.6,
+          "recall@1": 0.4,
+          "ndcg@1": 0.6,
+          "precision@3": 0.3333,
+          "recall@3": 0.7,
+          "ndcg@3": 0.5452,
+          "precision@5": 0.2,
+          "recall@5": 0.7,
+          "ndcg@5": 0.5452,
+          "precision@10": 0.12,
+          "recall@10": 0.8,
+          "ndcg@10": 0.5861
+        },
+        "hybrid_rrf": {
+          "mrr": 0.82,
+          "precision@1": 0.8,
+          "recall@1": 0.6,
+          "ndcg@1": 0.8,
+          "precision@3": 0.4,
+          "recall@3": 0.8,
+          "ndcg@3": 0.7066,
+          "precision@5": 0.24,
+          "recall@5": 0.8,
+          "ndcg@5": 0.7066,
+          "precision@10": 0.14,
+          "recall@10": 1.0,
+          "ndcg@10": 0.7644
+        },
+        "hybrid_rerank": {
+          "mrr": 0.84,
+          "precision@1": 0.8,
+          "recall@1": 0.6,
+          "ndcg@1": 0.8,
+          "precision@3": 0.4,
+          "recall@3": 0.8,
+          "ndcg@3": 0.7066,
+          "precision@5": 0.28,
+          "recall@5": 1.0,
+          "ndcg@5": 0.7839,
+          "precision@10": 0.14,
+          "recall@10": 1.0,
+          "ndcg@10": 0.7839
+        }
+      }
+    }
+  },
+  "human_failure_analysis": [
+    {
+      "question_id": "Q-011",
+      "question": "How long does the first LEMS run take on the 8B models, and how long when cached?",
+      "question_type": "factual",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 7,
+        "dense": 1,
+        "hybrid_rrf": 3,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p19_c3",
+          "page": 19,
+          "heading": "B.1.4. HOW DO COMPONENTS CONTRIBUTE TO LEMS PERFORMANCE?"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p8_c3",
+          "page": 8,
+          "heading": "5.3.2. INDIVIDUAL CONTRIBUTIONS TO LEMS"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p19_c3",
+          "page": 19,
+          "heading": "B.1.4. HOW DO COMPONENTS CONTRIBUTE TO LEMS PERFORMANCE?"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p8_c3",
+          "page": 8,
+          "heading": "5.3.2. INDIVIDUAL CONTRIBUTIONS TO LEMS"
+        }
+      }
+    },
+    {
+      "question_id": "Q-012",
+      "question": "Which off-the-shelf solver does LEMS use for its allocation problem?",
+      "question_type": "factual",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 3,
+        "dense": ">50",
+        "hybrid_rrf": 27,
+        "hybrid_rerank": 21
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p5_c3",
+          "page": 5,
+          "heading": "4.2. Global Rank Allocation via Layer-wise Error Modeling (LEMS)"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p14_c5",
+          "page": 14,
+          "heading": "B.1. Extended Explanations and Ablations for LEMS"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p5_c3",
+          "page": 5,
+          "heading": "4.2. Global Rank Allocation via Layer-wise Error Modeling (LEMS)"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p5_c3",
+          "page": 5,
+          "heading": "4.2. Global Rank Allocation via Layer-wise Error Modeling (LEMS)"
+        }
+      }
+    },
+    {
+      "question_id": "Q-013",
+      "question": "What limitation do the authors admit about their Fisher-based decomposition?",
+      "question_type": "factual",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 11,
+        "dense": 21,
+        "hybrid_rrf": 11,
+        "hybrid_rerank": 2
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p27_c3",
+          "page": 27,
+          "heading": "B.8. Qualitative Results"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p3_c5",
+          "page": 3,
+          "heading": "4.1. Decoupled Token-Wise Estimation (KFAC-SVD)"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p2_c3",
+          "page": 2,
+          "heading": "2. Related Work"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p1_c2",
+          "page": 1,
+          "heading": "Abstract"
+        }
+      }
+    },
+    {
+      "question_id": "Q-014",
+      "question": "How much calibration data is used to fit the SVD decompositions?",
+      "question_type": "factual",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 14,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p19_c2",
+          "page": 19,
+          "heading": "B.1.4. HOW DO COMPONENTS CONTRIBUTE TO LEMS PERFORMANCE?"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p6_c2",
+          "page": 6,
+          "heading": "5. Evaluation"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p6_c2",
+          "page": 6,
+          "heading": "5. Evaluation"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p6_c2",
+          "page": 6,
+          "heading": "5. Evaluation"
+        }
+      }
+    },
+    {
+      "question_id": "Q-015",
+      "question": "Which GPU were the experiments run on? (H200 for the main experiments, A100 for the speed measurements)",
+      "question_type": "apparent_conflict",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p6_c2",
+          "page": 6,
+          "heading": "5. Evaluation"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p26_c7",
+          "page": 26,
+          "heading": "B.7. Inference Acceleration"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p6_c2",
+          "page": 6,
+          "heading": "5. Evaluation"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p26_c7",
+          "page": 26,
+          "heading": "B.7. Inference Acceleration"
+        }
+      }
+    },
+    {
+      "question_id": "Q-016",
+      "question": "How are the depth-penalty parameters chosen, and with how many trials?",
+      "question_type": "methodological",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 2,
+        "dense": 3,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p19_c2",
+          "page": 19,
+          "heading": "B.1.4. HOW DO COMPONENTS CONTRIBUTE TO LEMS PERFORMANCE?"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p16_c5",
+          "page": 16,
+          "heading": "B.1.1. BIAS FUNCTION IN ERROR MODELING"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p14_c4",
+          "page": 14,
+          "heading": "A. Extended Experimental Setup"
+        }
+      }
+    },
+    {
+      "question_id": "Q-017",
+      "question": "Does KL divergence beat MSE as the calibration metric? (better on accuracy, slightly worse on perplexity)",
+      "question_type": "apparent_conflict",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 2,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p18_c1",
+          "page": 18,
+          "heading": "B.1.2. CORRECT CROSS-LAYER SCALING (IMPORTANCE)"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        }
+      }
+    },
+    {
+      "question_id": "Q-018",
+      "question": "Why was KL divergence chosen as the sensitivity signal?",
+      "question_type": "methodological",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 2,
+        "dense": 34,
+        "hybrid_rrf": 8,
+        "hybrid_rerank": 3
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p14_c4",
+          "page": 14,
+          "heading": "A. Extended Experimental Setup"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p14_c4",
+          "page": 14,
+          "heading": "A. Extended Experimental Setup"
+        }
+      }
+    },
+    {
+      "question_id": "Q-019",
+      "question": "What default reference compression is used for calibration, and what is the trade-off?",
+      "question_type": "methodological",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 8,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 3
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p27_c3",
+          "page": 27,
+          "heading": "B.8. Qualitative Results"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p8_c6",
+          "page": 8,
+          "heading": "5.3.3. LEMS ERROR CALIBRATION"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p14_c2",
+          "page": 14,
+          "heading": "A. Extended Experimental Setup"
+        }
+      }
+    },
+    {
+      "question_id": "Q-020",
+      "question": "In the Llama 3.2-3B study, did ATP or ASVD reach the lower perplexity? (ASVD, 12.06 vs 13.48)",
+      "question_type": "comparative",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        }
+      }
+    },
+    {
+      "question_id": "Q-021",
+      "question": "How do the authors say GFWSVD behaves under their conditions?",
+      "question_type": "comparative",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": ">50",
+        "hybrid_rrf": 27,
+        "hybrid_rerank": 5
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p6_c5",
+          "page": 6,
+          "heading": "5.2. SVD-Compression Results"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p21_c3",
+          "page": 21,
+          "heading": "B.2. Additional Explanations and Ablations on KFAC-SVD"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p8_c7",
+          "page": 8,
+          "heading": "5.3.4. KFAC-SVD ESTIMATION QUALITY"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p21_c3",
+          "page": 21,
+          "heading": "B.2. Additional Explanations and Ablations on KFAC-SVD"
+        }
+      }
+    },
+    {
+      "question_id": "Q-022",
+      "question": "Which matters more for results: the random seed or the calibration dataset?",
+      "question_type": "comparative",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p25_c3",
+          "page": 25,
+          "heading": "B.6. Calibration Data Ablations"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p25_c3",
+          "page": 25,
+          "heading": "B.6. Calibration Data Ablations"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p25_c3",
+          "page": 25,
+          "heading": "B.6. Calibration Data Ablations"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p25_c3",
+          "page": 25,
+          "heading": "B.6. Calibration Data Ablations"
+        }
+      }
+    },
+    {
+      "question_id": "Q-023",
+      "question": "Why does the ATP baseline miss layer-specific importance?",
+      "question_type": "methodological",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": 2,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p6_c4",
+          "page": 6,
+          "heading": "5.1. Rank Allocation Results"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p19_c1",
+          "page": 19,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p6_c4",
+          "page": 6,
+          "heading": "5.1. Rank Allocation Results"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p6_c4",
+          "page": 6,
+          "heading": "5.1. Rank Allocation Results"
+        }
+      }
+    },
+    {
+      "question_id": "Q-024",
+      "question": "Which layer types are more critical to preserve: feed-forward or attention?",
+      "question_type": "methodological",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": 1,
+        "hybrid_rrf": 1,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p18_c3",
+          "page": 18,
+          "heading": "B.1.3. DETAILED COMPARISON BETWEEN LEMS, ATP AND ASVD"
+        }
+      }
+    },
+    {
+      "question_id": "Q-025",
+      "question": "What extensions do the authors propose as future work?",
+      "question_type": "factual",
+      "labelled_by": "snehala24",
+      "status": "human_draft",
+      "ranks": {
+        "bm25": 1,
+        "dense": ">50",
+        "hybrid_rrf": 19,
+        "hybrid_rerank": 1
+      },
+      "top1_chunks": {
+        "bm25": {
+          "chunk_id": "doc_c67573ef50cc_p9_c1",
+          "page": 9,
+          "heading": "6. Conclusion and Limitations"
+        },
+        "dense": {
+          "chunk_id": "doc_c67573ef50cc_p9_c2",
+          "page": 9,
+          "heading": "Impact Statement"
+        },
+        "hybrid_rrf": {
+          "chunk_id": "doc_c67573ef50cc_p27_c4",
+          "page": 27,
+          "heading": "B.8. Qualitative Results"
+        },
+        "hybrid_rerank": {
+          "chunk_id": "doc_c67573ef50cc_p9_c1",
+          "page": 9,
+          "heading": "6. Conclusion and Limitations"
+        }
+      }
+    }
+  ],
+  "human_recall5_failures_by_config": {
+    "bm25": [
+      "Q-011",
+      "Q-013",
+      "Q-014",
+      "Q-019"
+    ],
+    "dense": [
+      "Q-012",
+      "Q-013",
+      "Q-018",
+      "Q-021",
+      "Q-025"
+    ],
+    "hybrid_rrf": [
+      "Q-012",
+      "Q-013",
+      "Q-018",
+      "Q-021",
+      "Q-025"
+    ],
+    "hybrid_rerank": [
+      "Q-012"
+    ]
+  }
+}
