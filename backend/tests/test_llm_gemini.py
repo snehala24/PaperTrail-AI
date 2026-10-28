@@ -394,6 +394,23 @@ def test_timeout_retries_and_exhausts():
         run_sync(provider.generate(messages))
     # 1 initial + 2 retries = 3 calls
     assert mock_client.aio.interactions.create.await_count == 3
+    assert mock_client.aio.interactions.create.call_args.kwargs["timeout"] == 0.05
+
+
+def test_timeout_passed_to_sdk_interactions_create():
+    mock_interaction = make_mock_interaction(output_text="Response")
+    mock_client = make_mock_client(return_value=mock_interaction)
+
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.8-flash",
+        client=mock_client,
+        timeout=45.0,
+    )
+
+    run_sync(provider.generate([LLMMessage(role="user", content="Hello")]))
+    mock_client.aio.interactions.create.assert_awaited_once()
+    assert mock_client.aio.interactions.create.call_args.kwargs["timeout"] == 45.0
 
 
 def test_cancellation_not_retried():

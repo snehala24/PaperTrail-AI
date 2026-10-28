@@ -332,7 +332,10 @@ class GeminiProvider(LLMProvider):
         for attempt in range(self.max_retries + 1):
             try:
                 interaction = await self._execute_with_timeout(
-                    self._client.aio.interactions.create(**kwargs)
+                    self._client.aio.interactions.create(
+                        timeout=self.timeout,
+                        **kwargs,
+                    )
                 )
                 return self._build_response(interaction, attempt, start_time)
             except asyncio.CancelledError:
