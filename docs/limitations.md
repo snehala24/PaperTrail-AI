@@ -13,9 +13,10 @@
 - **Single-Paper Grounding**: Current empirical benchmark queries are grounded in a single 34-page arXiv paper (`2610.32878v1.pdf`). Cross-paper multi-document query evaluation is implemented in the schema and runner, but extensive multi-paper benchmarks will be expanded as additional papers are added.
 - **Small Sample Size ($n=8$) & Wide Confidence Intervals**: With 8 answerable queries and 2 unanswerable queries, sample size is insufficient for formal statistical significance ($n < 30$). As reflected in the 95% bootstrap confidence intervals (e.g. Recall@5: [0.625, 1.0]), estimates have wide margins of error and serve primarily as a directional baseline and smoke test.
 
-## 4. Scope Boundaries for Day 1 & Day 2
+## 4. Scope Boundaries & Milestone Completion
 - **Day 1**: Contracts, ingestion, persistence, and evaluation scaffold completed.
-- **Day 2**: Passage chunker v0.2.2, BM25, dense FAISS, RRF fusion, cross-encoder reranker, and evaluation runner completed.
-- **Day 3 (Upcoming)**: LLMProvider abstraction, Gemini integration, answer generation, and honest abstention handling.
-- **Day 4 (Upcoming)**: Claim extraction, claim-to-evidence ledgers, apparent conflict reasoning, and two-step citation validation.
+- **Day 2**: Passage chunker v0.2.2, BM25, dense FAISS, RRF fusion, cross-encoder reranker, and retrieval evaluation completed.
+- **Day 3**: Grounded answer generation, 3-layer citation verification (existence, verbatim quote, entailment), configurable Gemini timeouts, zero-tolerance abstention, and apparent-conflict benchmark evaluation completed (accepted 2026-10-28, commit 3b0a096).
+  - *Known Day 3 Limitation*: Cross-paper queries (Q-029, Q-030) remain blocked until the second paper (GFWSVD) is ingested in Day 4.
+- **Day 4 (Upcoming)**: Second paper ingestion (GFWSVD), multi-paper claim-to-evidence ledger, and cross-paper comparative reasoning.
 - **Day 5 (Upcoming)**: Next.js frontend UI workspace.
