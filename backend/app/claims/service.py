@@ -18,7 +18,11 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from backend.app.citations.verifier import CitationVerifier, _clean_json_response
+from backend.app.citations.verifier import (
+    CitationVerifier,
+    _clean_json_response,
+    sanitize_error_message,
+)
 from backend.app.llm.base import LLMMessage, LLMProvider, LLMResponse
 from backend.app.retrieval.hybrid import HybridRetriever, ensure_retriever_indexed, retriever as default_retriever
 from backend.app.schemas import (
@@ -302,7 +306,8 @@ class AnswerService:
                 max_tokens=1024,
             )
         except Exception as exc:
-            logger.warning("LLM generation failed for question '%s': %s", req.question, exc)
+            safe_err = sanitize_error_message(str(exc))
+            logger.warning("LLM generation failed (%s): %s", type(exc).__name__, safe_err)
             timings["generation"] = round(time.perf_counter() - t1, 4)
             timings["total"] = round(time.perf_counter() - start_time, 4)
             return AnswerResponse(
@@ -310,7 +315,7 @@ class AnswerService:
                 evidence_links=[],
                 citation_checks=[],
                 status=AnswerStatus.ERROR,
-                abstain_reason=f"LLM generation failed: {type(exc).__name__}: {str(exc)}",
+                abstain_reason=f"LLM generation failed: {type(exc).__name__}: {safe_err}",
                 timings=timings,
             )
 
@@ -321,13 +326,14 @@ class AnswerService:
         try:
             raw_dict = json.loads(clean_raw)
         except json.JSONDecodeError as exc:
+            safe_err = sanitize_error_message(str(exc))
             timings["total"] = round(time.perf_counter() - start_time, 4)
             return AnswerResponse(
                 answer="I encountered an internal formatting error while generating the grounded answer.",
                 evidence_links=[],
                 citation_checks=[],
                 status=AnswerStatus.ERROR,
-                abstain_reason=f"Generator output was malformed JSON: {str(exc)}",
+                abstain_reason=f"Generator output was malformed JSON: {safe_err}",
                 timings=timings,
             )
 

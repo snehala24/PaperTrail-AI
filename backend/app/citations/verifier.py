@@ -22,6 +22,66 @@ from backend.app.schemas import (
 
 logger = logging.getLogger(__name__)
 
+
+def sanitize_error_message(msg: Any) -> str:
+    """
+    Sanitize error messages to prevent leakage of API keys, tokens, or credentials.
+
+    Redacts known common credential patterns:
+    - API key headers (x-goog-api-key, x-api-key) with ':' or '='
+    - Common query parameters: key, api_key, api-key, access_token, access-token, auth_token, secret
+    - Standalone credential assignments (api_key=..., key=...)
+    - Authorization Bearer tokens (case-insensitive)
+    - Google API key formats (AIza...)
+
+    Handles full values including URL-encoded characters while preserving non-sensitive diagnostic text.
+    Always returns a string (empty string for None or empty inputs).
+    """
+    if msg is None:
+        return ""
+    if not isinstance(msg, str):
+        msg = str(msg)
+    if not msg:
+        return ""
+
+    # 1. Redact header-style API key assignments (e.g., x-goog-api-key: secret or x-api-key=secret)
+    sanitized = re.sub(
+        r"(?i)\b(x-goog-api-key|x-api-key)\s*([:=])\s*['\"]?(?!\[REDACTED)([^&\s,;\"'<>#)]+)['\"]?",
+        r"\1\2 [REDACTED]",
+        msg,
+    )
+
+    # 2. Redact common query parameters case-insensitively (including URL-encoded characters)
+    sanitized = re.sub(
+        r"(?i)(?<=[?&])(key|api[_-]?key|access[_-]?token|auth[_-]?token|auth[_-]?key|token|secret)=([^&\s\"'<>#)]+)",
+        r"\1=[REDACTED]",
+        sanitized,
+    )
+    # Also handle standalone param=value or param: value if not preceded by ? or &
+    sanitized = re.sub(
+        r"(?i)(?<![?&])\b(api_key|api-key|access_token|access-token|auth_token|auth-token|secret)\s*([:=])\s*['\"]?(?!\[REDACTED)([^&\s,;\"'<>#)]+)['\"]?",
+        r"\1\2 [REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"(?i)(?<![a-zA-Z0-9_?&-]|\[)key\s*=\s*['\"]?(?!\[REDACTED)([^&\s,;\"'<>#)]+)['\"]?",
+        r"key=[REDACTED]",
+        sanitized,
+    )
+
+    # 3. Redact Authorization Bearer headers/tokens (preserving case of 'bearer')
+    sanitized = re.sub(
+        r"(?i)\b(bearer)\s+['\"]?(?!\[REDACTED)([A-Za-z0-9_\-.~%+=]+)['\"]?",
+        r"\1 [REDACTED]",
+        sanitized,
+    )
+
+    # 4. Redact standalone Google API key format (unambiguously literal hyphen in character class)
+    sanitized = re.sub(r"\bAIza[0-9A-Za-z_\-]+", "[REDACTED_API_KEY]", sanitized)
+
+    return sanitized
+
+
 VERIFIER_SYSTEM_PROMPT = """You are a rigorous scientific citation verifier for a research intelligence platform.
 Your task is to determine whether an atomic claim statement is directly and strictly supported by an excerpt from a research paper.
 
@@ -240,11 +300,13 @@ class CitationVerifier:
                 )
 
         except Exception as exc:
+            safe_err = sanitize_error_message(str(exc))
             logger.warning(
-                "Layer 3 entailment verification failed for claim '%s', chunk '%s': %s",
+                "Layer 3 entailment verification failed for claim '%s', chunk '%s' (%s): %s",
                 claim_id,
                 chunk_id,
-                exc,
+                type(exc).__name__,
+                safe_err,
             )
             # Fail closed: Do NOT mark verified on provider failure, timeout, or malformed response
             return CitationCheck(
@@ -253,7 +315,7 @@ class CitationVerifier:
                 exists=exists,
                 supports=None,
                 status=ClaimVerificationStatus.UNVERIFIED,
-                notes=f"Layer 3 failure: LLM entailment check encountered {type(exc).__name__}: {str(exc)}",
+                notes=f"Layer 3 failure: LLM entailment check encountered {type(exc).__name__}: {safe_err}",
             )
 
     async def verify_claim(
