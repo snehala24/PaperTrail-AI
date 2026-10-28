@@ -25,7 +25,7 @@ All asynchronous calls are driven via run_sync to avoid Windows socketpair / eve
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -75,19 +75,29 @@ def run_sync(coro):
 class MockLLMProvider(LLMProvider):
     """Deterministic mock LLM provider for generator and verifier tests."""
 
-    def __init__(self, responses: Optional[List[str]] = None, default_response: str = "{}"):
+    def __init__(self, responses: Optional[List[Union[str, LLMResponse]]] = None, default_response: str = "{}"):
         self.responses = list(responses) if responses else []
         self.default_response = default_response
         self.call_history: List[List[LLMMessage]] = []
+        self.call_kwargs: List[Dict[str, Any]] = []
 
     async def generate(
         self,
         messages: List[LLMMessage],
         temperature: float = 0.0,
         max_tokens: Optional[int] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         self.call_history.append(messages)
-        content = self.responses.pop(0) if self.responses else self.default_response
+        call_info = dict(temperature=temperature, max_tokens=max_tokens, **kwargs)
+        self.call_kwargs.append(call_info)
+        if self.responses:
+            item = self.responses.pop(0)
+            if isinstance(item, LLMResponse):
+                return item
+            content = item
+        else:
+            content = self.default_response
         return LLMResponse(
             content=content,
             model="mock-gemini-2.5-flash",
@@ -381,6 +391,115 @@ def test_abstain_malformed_generator_json():
 
     assert resp.status == AnswerStatus.ERROR
     assert "malformed JSON" in resp.abstain_reason
+
+
+def test_service_truncated_token_limit_metadata_fails_closed():
+    """LLMResponse with finish_reason='max_tokens' fails closed with ERROR and 0 verified citations."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    # Even if content has partial valid-looking JSON, truncation metadata forces fail-closed
+    partial_resp = LLMResponse(
+        content='{\n  "answer": "Incomplete answer',
+        model="gemini-3.6-flash",
+        status="budget_exceeded",
+        finish_reason="max_tokens",
+        completion_tokens=1024,
+    )
+
+    llm = MockLLMProvider([partial_resp])
+    service = AnswerService(retriever=retriever, llm_provider=llm)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert "truncated" in resp.abstain_reason.lower()
+    assert len(resp.citation_checks) == 0
+    assert len(resp.evidence_links) == 0
+
+
+def test_service_incomplete_status_metadata_fails_closed():
+    """LLMResponse with status='incomplete' fails closed without attempting partial evaluation."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    incomplete_resp = LLMResponse(
+        content='{"answer": "Abrupt cutoff',
+        model="gemini-3.6-flash",
+        status="incomplete",
+        finish_reason="incomplete",
+        completion_tokens=512,
+    )
+
+    llm = MockLLMProvider([incomplete_resp])
+    service = AnswerService(retriever=retriever, llm_provider=llm)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert "truncated" in resp.abstain_reason.lower()
+    assert len(resp.citation_checks) == 0
+    assert len(resp.evidence_links) == 0
+
+
+def test_service_missing_metadata_valid_json_succeeds():
+    """LLMResponse with missing/None completion metadata succeeds if JSON is valid and grounded."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    valid_json = json.dumps({
+        "answer": "LEMS utilizes Gurobi optimizer.",
+        "claims": [
+            {
+                "claim_id": "c1",
+                "text": "LEMS utilizes Gurobi optimizer.",
+                "chunk_ids": ["doc_c67573ef50cc_p6_c2"],
+                "quote": "Gurobi optimizer",
+            }
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [],
+    })
+    verif_json = json.dumps({"supported": True, "rationale": "Directly entailed."})
+
+    resp_no_meta = LLMResponse(
+        content=valid_json,
+        model="gemini-3.6-flash",
+        status=None,
+        finish_reason=None,
+    )
+
+    llm = MockLLMProvider([resp_no_meta, verif_json])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert len(resp.citation_checks) == 1
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+
+
+def test_service_empty_output_fails_closed():
+    """Empty generator output fails closed with ERROR."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    empty_resp = LLMResponse(content="", model="gemini-3.6-flash")
+    llm = MockLLMProvider([empty_resp])
+    service = AnswerService(retriever=retriever, llm_provider=llm)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert len(resp.citation_checks) == 0
+    assert len(resp.evidence_links) == 0
+
 
 
 def test_abstain_generator_missing_claims():
@@ -1367,3 +1486,590 @@ def test_citation_verifier_exception_logging_is_sanitized(caplog):
     # Secret bearer token must NOT leak into CitationCheck notes
     assert secret_bearer not in check.notes
     assert "[REDACTED]" in check.notes
+
+
+# ---------------------------------------------------------------------------
+# Generator-to-Parser Integration Tests (Checkpoint 3)
+# ---------------------------------------------------------------------------
+
+
+def test_integration_valid_json_response():
+    """Valid plain JSON generator response correctly parses, validates, and completes citation verification."""
+    chunk = make_chunk(
+        chunk_id="doc_c67573ef50cc_p1_c0",
+        text="LEMS optimizes layer-wise truncation error through discrete search.",
+    )
+    retriever = MockRetriever([chunk])
+
+    gen_raw = json.dumps({
+        "answer": "LEMS optimizes layer-wise truncation error through discrete search.",
+        "claims": [
+            {
+                "claim_id": "c1",
+                "text": "LEMS optimizes layer-wise truncation error.",
+                "chunk_ids": ["doc_c67573ef50cc_p1_c0"],
+                "quote": "layer-wise truncation error through discrete search",
+            }
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [],
+    })
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence directly entails the claim."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS optimize?", doc_ids=["doc_c67573ef50cc"])
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert resp.abstain_reason is None
+    assert len(resp.citation_checks) == 1
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+    assert resp.citation_checks[0].supports is True
+    assert len(resp.evidence_links) == 1
+    assert resp.evidence_links[0].relation == EvidenceRelation.SUPPORTS
+
+
+def test_integration_fenced_json_with_surrounding_prose():
+    """Generator JSON wrapped in markdown fences with leading/trailing prose parses and completes pipeline."""
+    chunk = make_chunk(
+        chunk_id="doc_c67573ef50cc_p2_c1",
+        text="Singular value decomposition produces low-rank approximations of weight matrices.",
+    )
+    retriever = MockRetriever([chunk])
+
+    gen_raw = (
+        "Based on the paper, here is the answer:\n"
+        "```json\n"
+        "{\n"
+        '  "answer": "SVD generates low-rank matrix approximations.",\n'
+        '  "claims": [\n'
+        "    {\n"
+        '      "claim_id": "c_svd",\n'
+        '      "text": "SVD approximates weight matrices in low rank.",\n'
+        '      "chunk_ids": ["doc_c67573ef50cc_p2_c1"],\n'
+        '      "quote": "low-rank approximations of weight matrices"\n'
+        "    }\n"
+        "  ],\n"
+        '  "abstained": false,\n'
+        '  "abstain_reason": null,\n'
+        '  "conflicts": []\n'
+        "}\n"
+        "```\n"
+        "I hope this assists with your research."
+    )
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Directly supported by retrieved text."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does SVD produce?", doc_ids=["doc_c67573ef50cc"])
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert len(resp.citation_checks) == 1
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+
+
+def test_integration_literal_newlines_and_tabs_in_string_values():
+    """Generator JSON with raw newlines and tabs inside strings is normalized and successfully verified."""
+    chunk_text = "Layer-wise error model search\nachieves higher compression with\toptimal results."
+    chunk = make_chunk(
+        chunk_id="doc_c67573ef50cc_p1_c1",
+        text=chunk_text,
+    )
+    retriever = MockRetriever([chunk])
+
+    # Raw literal newline in answer, raw tab in claim text, and raw newline/tab in quote
+    gen_raw = (
+        '{\n'
+        '  "answer": "LEMS achieves higher compression.\nKey contribution demonstrated.",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "c1",\n'
+        '      "text": "LEMS achieves optimal\tresults.",\n'
+        '      "chunk_ids": ["doc_c67573ef50cc_p1_c1"],\n'
+        '      "quote": "higher compression with\toptimal results."\n'
+        '    }\n'
+        '  ],\n'
+        '  "abstained": false,\n'
+        '  "abstain_reason": null,\n'
+        '  "conflicts": []\n'
+        '}'
+    )
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Entailed."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What is the contribution of LEMS?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert "LEMS achieves higher compression.\nKey contribution demonstrated." == resp.answer
+    assert len(resp.citation_checks) == 1
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+    assert resp.citation_checks[0].supports is True
+    assert len(resp.evidence_links) == 1
+    assert resp.evidence_links[0].relation == EvidenceRelation.SUPPORTS
+
+
+def test_integration_escaped_quotes_and_backslashes_in_generator_json():
+    """Generator JSON with escaped quotes and backslashes parses correctly without corrupting strings."""
+    chunk = make_chunk(
+        chunk_id="doc_c67573ef50cc_p3_c0",
+        text='The parameter notation is denoted as "alpha" with path C:\\models.',
+    )
+    retriever = MockRetriever([chunk])
+
+    gen_raw = (
+        '{\n'
+        '  "answer": "The notation uses \\"alpha\\" with path C:\\\\models.",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "c_esc",\n'
+        '      "text": "Notation \\"alpha\\" specifies the scaling factor.",\n'
+        '      "chunk_ids": ["doc_c67573ef50cc_p3_c0"],\n'
+        '      "quote": "denoted as \\"alpha\\" with path C:\\\\models"\n'
+        '    }\n'
+        '  ],\n'
+        '  "abstained": false,\n'
+        '  "abstain_reason": null,\n'
+        '  "conflicts": []\n'
+        '}'
+    )
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Matches notation."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What is the parameter notation?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert 'The notation uses "alpha" with path C:\\models.' == resp.answer
+    assert len(resp.citation_checks) == 1
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+
+
+def test_integration_missing_required_fields_fails_closed():
+    """Generator JSON missing required fields (e.g. claims) fails schema validation and abstains."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    # Missing claims list entirely
+    gen_raw = json.dumps({
+        "answer": "An answer with no claims field.",
+        "abstained": False,
+    })
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What is the answer?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ABSTAINED
+    assert "Generator output validation failed" in resp.abstain_reason
+    assert len(resp.citation_checks) == 0
+    assert len(resp.evidence_links) == 0
+
+
+def test_integration_malformed_control_characters_outside_strings_fails_closed():
+    """Generator output containing illegal control character outside strings fails closed with ERROR."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    # \x01 outside strings is not valid JSON whitespace
+    gen_raw = '{\x01 "answer": "Synthesized answer.", "claims": []}'
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What is the answer?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert "malformed JSON" in resp.abstain_reason
+
+
+def test_integration_generator_fenced_with_thought_tags_and_preamble_succeeds():
+    """Generator output preceded by thought tags and conversational preamble is parsed and verified."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    gen_raw = (
+        '<thought>Let us carefully review the SVD error models.</thought>\n'
+        'Here is the extracted grounded answer:\n'
+        '```json\n'
+        '{\n'
+        '  "answer": "LEMS achieves optimal layer-wise compression.",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "c1",\n'
+        '      "text": "LEMS utilizes Gurobi optimizer.",\n'
+        '      "chunk_ids": ["doc_c67573ef50cc_p6_c2"],\n'
+        '      "quote": "Gurobi optimizer"\n'
+        '    }\n'
+        '  ],\n'
+        '  "abstained": false,\n'
+        '  "abstain_reason": null,\n'
+        '  "conflicts": []\n'
+        '}\n'
+        '```'
+    )
+    verif_json = json.dumps({"supported": True, "rationale": "Directly entailed by chunk."})
+
+    llm = MockLLMProvider([gen_raw, verif_json])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert "LEMS achieves optimal layer-wise compression." in resp.answer
+    assert len(resp.citation_checks) == 1
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+
+
+def test_integration_generator_unclosed_fence_succeeds():
+    """Generator output inside an unclosed code fence is safely recovered and verified."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    gen_raw = (
+        '```json\n'
+        '{\n'
+        '  "answer": "LEMS utilizes Gurobi optimizer.",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "c1",\n'
+        '      "text": "LEMS utilizes Gurobi optimizer.",\n'
+        '      "chunk_ids": ["doc_c67573ef50cc_p6_c2"],\n'
+        '      "quote": "Gurobi optimizer"\n'
+        '    }\n'
+        '  ],\n'
+        '  "abstained": false,\n'
+        '  "abstain_reason": null,\n'
+        '  "conflicts": []\n'
+        '}'
+    )
+    verif_json = json.dumps({"supported": True, "rationale": "Directly entailed."})
+
+    llm = MockLLMProvider([gen_raw, verif_json])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert resp.citation_checks[0].status == ClaimVerificationStatus.VERIFIED
+
+
+def test_integration_generator_unclosed_fence_truncated_json_fails_closed():
+    """Truncated generator JSON inside an unclosed fence fails closed with ERROR."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    gen_raw = (
+        '```json\n'
+        '{\n'
+        '  "answer": "Truncated answer",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "c1"'
+    )
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert "malformed JSON" in resp.abstain_reason
+
+
+def test_integration_generator_plain_prose_fails_closed():
+    """Plain conversational refusal with no JSON structure fails closed with ERROR."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    gen_raw = "I cannot answer this question based on the provided literature."
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert "malformed JSON" in resp.abstain_reason
+
+
+def test_build_generator_response_format_schema():
+    """Verify build_generator_response_format returns valid schema with required fields."""
+    from backend.app.claims.service import (
+        ANSWER_GENERATOR_JSON_SCHEMA,
+        build_generator_response_format,
+    )
+
+    rf = build_generator_response_format()
+    assert rf is not None
+
+    if hasattr(rf, "schema_"):
+        schema = rf.schema_
+        mime_type = rf.mime_type
+    else:
+        schema = rf.get("schema") or rf.get("schema_")
+        mime_type = rf.get("mime_type")
+
+    assert mime_type == "application/json"
+    assert schema["type"] == "object"
+    props = schema["properties"]
+    assert "answer" in props
+    assert "claims" in props
+    assert "abstained" in props
+    assert "abstain_reason" in props
+    assert "conflicts" in props
+
+    claim_props = props["claims"]["items"]["properties"]
+    assert "claim_id" in claim_props
+    assert "text" in claim_props
+    assert "chunk_ids" in claim_props
+    assert "quote" in claim_props
+
+    assert set(schema["required"]) == {"answer", "claims", "abstained", "conflicts"}
+
+
+def test_generator_system_prompt_evidence_selection_rules():
+    """Verify GENERATOR_SYSTEM_PROMPT contains explicit instructions on evidence selection and citation validity."""
+    from backend.app.claims.service import GENERATOR_SYSTEM_PROMPT
+
+    assert "Cite only chunks that directly support the specific claim" in GENERATOR_SYSTEM_PROMPT
+    assert "every cited chunk in chunk_ids must directly support the claim and contain the supplied verbatim quote" in GENERATOR_SYSTEM_PROMPT
+    assert "Do not add chunks merely because they discuss the same broader topic" in GENERATOR_SYSTEM_PROMPT
+    assert "prefer the smallest sufficient evidence set" in GENERATOR_SYSTEM_PROMPT
+    assert "Never invent quotes or chunk IDs" in GENERATOR_SYSTEM_PROMPT
+
+
+def test_answer_service_passes_configured_2048_budget_and_response_format():
+    """AnswerService passes 2048 token budget and response_format to the LLMProvider."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    gen_raw = json.dumps({
+        "answer": "LEMS models the distribution of layer-wise compression errors.",
+        "claims": [
+            {
+                "claim_id": "claim_1",
+                "text": "LEMS uses layer-wise error models.",
+                "chunk_ids": [chunk.chunk_id],
+                "quote": "Gurobi optimizer",
+            }
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [],
+    })
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert len(llm.call_kwargs) >= 1
+    gen_call_kwargs = llm.call_kwargs[0]
+    assert gen_call_kwargs["max_tokens"] == 2048
+    assert "response_format" in gen_call_kwargs
+    assert gen_call_kwargs["response_format"] is not None
+
+
+def test_answer_service_custom_max_output_tokens():
+    """AnswerService respects custom max_output_tokens constructor argument."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    gen_raw = json.dumps({
+        "answer": "Answer with custom budget.",
+        "claims": [
+            {
+                "claim_id": "c1",
+                "text": "Claim text.",
+                "chunk_ids": [chunk.chunk_id],
+                "quote": "Gurobi optimizer",
+            }
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [],
+    })
+
+    verif_raw = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_raw, verif_raw])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier, max_output_tokens=3000)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    gen_call_kwargs = llm.call_kwargs[0]
+    assert gen_call_kwargs["max_tokens"] == 3000
+
+
+def test_answer_service_incomplete_status_fails_closed_zero_claims():
+    """Interaction status 'incomplete' fails closed with zero claims and zero citation checks."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    incomplete_resp = LLMResponse(
+        content='{"answer": "Cut off answer',
+        model="gemini-3.6-flash",
+        status="incomplete",
+        finish_reason="incomplete",
+        completion_tokens=296,
+        thought_tokens=790,
+    )
+
+    llm = MockLLMProvider([incomplete_resp])
+    service = AnswerService(retriever=retriever, llm_provider=llm)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert resp.evidence_links == []
+    assert resp.citation_checks == []
+    assert "truncated" in resp.abstain_reason.lower()
+
+
+def test_answer_service_budget_exceeded_fails_closed_zero_claims():
+    """Interaction status 'budget_exceeded' fails closed with zero claims and zero citation checks."""
+    chunk = make_chunk()
+    retriever = MockRetriever([chunk])
+
+    budget_resp = LLMResponse(
+        content='{"answer": "Hit budget limit',
+        model="gemini-3.6-flash",
+        status="budget_exceeded",
+        finish_reason="max_tokens",
+        completion_tokens=1024,
+    )
+
+    llm = MockLLMProvider([budget_resp])
+    service = AnswerService(retriever=retriever, llm_provider=llm)
+
+    req = AnswerRequest(question="What does LEMS use?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ERROR
+    assert resp.evidence_links == []
+    assert resp.citation_checks == []
+    assert "truncated" in resp.abstain_reason.lower()
+
+
+def test_validate_generator_output_accepts_aliases():
+    """Verify _validate_generator_output correctly accepts and normalizes schema aliases."""
+    from backend.app.claims.service import _validate_generator_output
+
+    raw = {
+        "answer": "Test answer",
+        "claims": [
+            {
+                "claim_id": "c1",
+                "claim_text": "Alias claim text",
+                "citation_chunk_ids": ["doc_123456789012_p1_c1"],
+                "verbatim_quote": "Alias quote",
+            }
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [],
+    }
+    is_valid, err, cleaned = _validate_generator_output(raw)
+    assert is_valid is True
+    assert err is None
+    claim = cleaned["claims"][0]
+    assert claim["claim_id"] == "c1"
+    assert claim["text"] == "Alias claim text"
+    assert claim["chunk_ids"] == ["doc_123456789012_p1_c1"]
+    assert claim["quote"] == "Alias quote"
+
+
+def test_abstain_claim_multi_citation_quote_missing_in_one_chunk():
+    """
+    Zero-tolerance regression test matching Scenario A:
+    When a claim cites two retrieved chunks, but its verbatim quote is present
+    only in the first chunk, the second citation fails Layer 2 quote matching,
+    causing the claim to be marked unsupported and the pipeline to abstain.
+    """
+    chunk1 = make_chunk(
+        chunk_id="doc_c67573ef50cc_p1_c2",
+        doc_id="doc_c67573ef50cc",
+        page=1,
+        text="LEMS advances rank allocation by introducing a layer-wise error surrogate that integrates local and global layer importance alongside a propagation bias.",
+    )
+    chunk2 = make_chunk(
+        chunk_id="doc_c67573ef50cc_p2_c1",
+        doc_id="doc_c67573ef50cc",
+        page=2,
+        text="Layer-wise Error Model Search (LEMS) addresses SVD compression errors through an ILP formulation.",
+    )
+    retriever = MockRetriever([chunk1, chunk2])
+
+    gen_json = json.dumps({
+        "answer": "LEMS introduces a layer-wise error surrogate.",
+        "claims": [
+            {
+                "claim_id": "claim_2",
+                "text": "LEMS advances rank allocation with a layer-wise error surrogate.",
+                "chunk_ids": ["doc_c67573ef50cc_p1_c2", "doc_c67573ef50cc_p2_c1"],
+                "quote": "surrogate that integrates local and global layer importance alongside a propagation bias",
+            }
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [],
+    })
+
+    # Verifier LLM only called for chunk1 (chunk2 fails at Layer 2 before LLM entailment)
+    verif_json = json.dumps({"supported": True, "rationale": "Evidence supports."})
+    llm = MockLLMProvider([gen_json, verif_json])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    req = AnswerRequest(question="What is the primary contribution?")
+    resp = run_sync(service.answer(req))
+
+    assert resp.status == AnswerStatus.ABSTAINED
+    assert "citations unsupported" in resp.abstain_reason
+    assert len(resp.citation_checks) == 2
+
+    chk_map = {c.chunk_id: c for c in resp.citation_checks}
+    assert chk_map["doc_c67573ef50cc_p1_c2"].status == ClaimVerificationStatus.VERIFIED
+    assert chk_map["doc_c67573ef50cc_p1_c2"].supports is True
+
+    assert chk_map["doc_c67573ef50cc_p2_c1"].status == ClaimVerificationStatus.UNSUPPORTED
+    assert chk_map["doc_c67573ef50cc_p2_c1"].supports is False
+    assert "Layer 2 failure: Verbatim quote" in chk_map["doc_c67573ef50cc_p2_c1"].notes

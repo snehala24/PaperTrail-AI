@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel
 
 
@@ -14,6 +14,9 @@ class LLMResponse(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    status: Optional[str] = None
+    finish_reason: Optional[str] = None
+    thought_tokens: Optional[int] = None
 
 
 class LLMProvider(ABC):
@@ -29,6 +32,7 @@ class LLMProvider(ABC):
         messages: List[LLMMessage],
         temperature: float = 0.0,
         max_tokens: Optional[int] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Generate a response from the language model given a list of messages."""
         pass

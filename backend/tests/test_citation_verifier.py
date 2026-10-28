@@ -7,11 +7,17 @@ All asynchronous operations are driven via run_sync to avoid Windows IOCP socket
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.app.citations.verifier import CitationVerifier, verify_citation
+from backend.app.citations.verifier import (
+    CitationVerifier,
+    _clean_json_response,
+    _normalize_json_control_chars,
+    verify_citation,
+)
 from backend.app.llm.base import LLMMessage, LLMProvider, LLMResponse
 from backend.app.schemas import (
     Chunk,
@@ -635,3 +641,275 @@ def test_verify_citation_functional_wrapper():
     )
     assert check.status == ClaimVerificationStatus.INVALID_REFERENCE
     assert check.supports is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for _clean_json_response (robust JSON extraction)
+# ---------------------------------------------------------------------------
+
+
+def test_clean_json_valid_plain_json():
+    """Valid plain JSON object is preserved and parsable."""
+    raw = '{"answer": "ok", "claims": []}'
+    cleaned = _clean_json_response(raw)
+    assert cleaned == raw
+    assert json.loads(cleaned) == {"answer": "ok", "claims": []}
+
+
+def test_clean_json_standard_fenced_json():
+    """Standard ```json fenced code block is stripped to clean JSON."""
+    raw = '```json\n{"answer": "ok", "claims": []}\n```'
+    cleaned = _clean_json_response(raw)
+    assert json.loads(cleaned) == {"answer": "ok", "claims": []}
+
+
+def test_clean_json_standard_fence_no_tag():
+    """Standard ``` fenced block without language tag is cleanly stripped."""
+    raw = '```\n{"answer": "ok", "claims": []}\n```'
+    cleaned = _clean_json_response(raw)
+    assert json.loads(cleaned) == {"answer": "ok", "claims": []}
+
+
+def test_clean_json_fenced_surrounded_by_explanatory_text():
+    """Fenced JSON surrounded by harmless leading and trailing prose is cleanly extracted."""
+    raw = (
+        'Here is the synthesized answer:\n```json\n{\n  "answer": "LEMS is effective.",\n  "claims": []\n}\n```\nHope this helps!'
+    )
+    cleaned = _clean_json_response(raw)
+    assert json.loads(cleaned) == {"answer": "LEMS is effective.", "claims": []}
+
+
+def test_clean_json_embedded_in_text_without_fences():
+    """Brace-aware scanner extracts complete JSON object embedded in surrounding text without fences."""
+    raw = 'The model determined: {"answer": "Grounded answer.", "claims": []} as the final response.'
+    cleaned = _clean_json_response(raw)
+    assert json.loads(cleaned) == {"answer": "Grounded answer.", "claims": []}
+
+
+def test_clean_json_braces_inside_quoted_strings():
+    """Braces inside string values do not confuse the brace-aware scanner."""
+    raw = '{\n  "answer": "Includes {nested} and {multiple} braces in string",\n  "claims": []\n}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "Includes {nested} and {multiple} braces in string"
+
+
+def test_clean_json_escaped_quotes_and_braces():
+    """Escaped quotes and braces inside JSON strings are handled correctly."""
+    raw = 'Here is the JSON: {"answer": "Text with \\"escaped quotes\\" and {brace}", "valid": true}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == 'Text with "escaped quotes" and {brace}'
+    assert parsed["valid"] is True
+
+
+def test_clean_json_prose_with_braces_before_real_json():
+    """Harmless prose with curly braces before the actual JSON object does not break extraction."""
+    raw = 'In section {2.1}, we find the answer: {"answer": "actual answer", "claims": []}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "actual answer"
+
+
+def test_clean_json_malformed_syntax_fails_clearly():
+    """Malformed syntax inside a fence is not silently repaired and fails with JSONDecodeError."""
+    raw = '```json\n{"answer": "missing closing quote}\n```'
+    cleaned = _clean_json_response(raw)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cleaned)
+
+
+def test_clean_json_truncated_unclosed_fence():
+    """Complete JSON object inside an unclosed code fence is safely recovered by brace-aware scanning."""
+    raw = '```json\n{"answer": "Truncated fence without end backticks"}'
+    cleaned = _clean_json_response(raw)
+    assert json.loads(cleaned) == {"answer": "Truncated fence without end backticks"}
+
+
+def test_clean_json_plain_prose_no_json_fails_clearly():
+    """Plain text containing no JSON object fails with JSONDecodeError upon json.loads."""
+    raw = "This is plain prose without any JSON object or brackets whatsoever."
+    cleaned = _clean_json_response(raw)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cleaned)
+
+
+def test_clean_json_empty_and_whitespace_only():
+    """Empty and whitespace-only inputs return empty strings and fail clearly with JSONDecodeError."""
+    assert _clean_json_response("") == ""
+    assert _clean_json_response("   \n\t  ") == ""
+    assert _clean_json_response(None) == ""
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(_clean_json_response(""))
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(_clean_json_response("   \n\t  "))
+
+
+def test_normalize_control_chars_multiline_string_literal():
+    """Literal newline inside JSON string is escaped and correctly decoded without error."""
+    raw = '{\n  "answer": "Line 1\nLine 2",\n  "claims": []\n}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "Line 1\nLine 2"
+    assert parsed["claims"] == []
+
+
+def test_normalize_control_chars_tabs_and_crlf_inside_strings():
+    """Literal tabs, CR, and CRLF inside strings are preserved upon decoding."""
+    raw = '{"quote": "col1\tcol2", "text": "line1\r\nline2", "cr": "val1\rval2"}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["quote"] == "col1\tcol2"
+    assert parsed["text"] == "line1\r\nline2"
+    assert parsed["cr"] == "val1\rval2"
+
+
+def test_normalize_control_chars_char_2_key_pattern():
+    """Control character at index 2 (e.g. immediately following opening quote) is safely escaped."""
+    raw = '{"\n": 1, "\tkey": "val"}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed == {"\n": 1, "\tkey": "val"}
+
+
+def test_normalize_control_chars_preserves_escaped_quotes_and_backslashes():
+    """Escaped quotes and trailing backslashes inside JSON strings remain structurally intact."""
+    raw = '{"answer": "He said: \\"Hello\\", path: C:\\\\", "valid": true}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == 'He said: "Hello", path: C:\\'
+    assert parsed["valid"] is True
+
+
+def test_normalize_control_chars_whitespace_outside_strings_preserved():
+    """Valid JSON formatting whitespace outside strings is preserved as plain JSON whitespace."""
+    raw = '{\n\t"answer":\t"ok",\r\n\t"claims":\t[]\r\n}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed == {"answer": "ok", "claims": []}
+
+
+def test_normalize_control_chars_illegal_outside_strings_fails():
+    """Control characters outside strings (e.g. \\x01) are not escaped and fail with JSONDecodeError."""
+    raw = '{\x01 "answer": "hi"}'
+    cleaned = _clean_json_response(raw)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cleaned)
+
+
+def test_clean_json_unterminated_string_fails_closed():
+    """Unterminated string literal is not silently repaired and raises JSONDecodeError."""
+    raw = '{"answer": "unterminated string'
+    cleaned = _clean_json_response(raw)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(cleaned)
+
+
+def test_clean_json_fenced_with_raw_newlines_and_prose():
+    """Fenced JSON with leading prose and raw newlines inside string values extracts cleanly."""
+    raw = (
+        'Here is the response:\n'
+        '```json\n'
+        '{\n'
+        '  "answer": "First line of answer.\nSecond line of answer.",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "c1",\n'
+        '      "text": "Statement with \ttab",\n'
+        '      "chunk_ids": ["chunk_01"],\n'
+        '      "quote": "Exact verbatim quote\nwith newline"\n'
+        '    }\n'
+        '  ]\n'
+        '}\n'
+        '```\n'
+        'End of generation.'
+    )
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "First line of answer.\nSecond line of answer."
+    assert len(parsed["claims"]) == 1
+    assert parsed["claims"][0]["text"] == "Statement with \ttab"
+    assert parsed["claims"][0]["quote"] == "Exact verbatim quote\nwith newline"
+
+
+def test_clean_json_with_generator_schema_validation():
+    """Decoded normalized output fully conforms to _validate_generator_output schema."""
+    from backend.app.claims.service import _validate_generator_output
+
+    raw = (
+        '```json\n'
+        '{\n'
+        '  "answer": "Advancing SVD-based LLM compression via LEMS.\nKey results demonstrated.",\n'
+        '  "claims": [\n'
+        '    {\n'
+        '      "claim_id": "claim_1",\n'
+        '      "text": "LEMS optimizes layer-wise truncation errors.",\n'
+        '      "chunk_ids": ["doc_c67573ef50cc_p1_c0"],\n'
+        '      "quote": "Layer-wise error model search\nachieves higher compression"\n'
+        '    }\n'
+        '  ],\n'
+        '  "abstained": false,\n'
+        '  "abstain_reason": null,\n'
+        '  "conflicts": []\n'
+        '}\n'
+        '```'
+    )
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    is_valid, err_msg, cleaned_data = _validate_generator_output(parsed)
+    assert is_valid is True
+    assert err_msg is None
+    assert cleaned_data["answer"].startswith("Advancing SVD-based LLM compression")
+    assert len(cleaned_data["claims"]) == 1
+    assert cleaned_data["claims"][0]["claim_id"] == "claim_1"
+
+
+def test_clean_json_unclosed_fence_with_complete_json():
+    """Complete JSON inside an unclosed ```json fence extracts cleanly."""
+    raw = '```json\n{\n  "answer": "Complete answer inside open fence",\n  "claims": []\n}'
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "Complete answer inside open fence"
+
+
+def test_clean_json_unclosed_fence_with_truncated_json_fails_closed():
+    """Truncated JSON inside unclosed fence strips delimiter and raises JSONDecodeError at syntax point."""
+    raw = '```json\n{\n  "answer": "Truncated answer",\n  "claims": ['
+    cleaned = _clean_json_response(raw)
+    assert cleaned.startswith("{")
+    with pytest.raises(json.JSONDecodeError) as exc_info:
+        json.loads(cleaned)
+    assert "char 0" not in str(exc_info.value)
+
+
+def test_clean_json_thought_tags_prelude_stripped():
+    """Thinking/thought blocks (<thought>...</thought>) preceding JSON are cleanly stripped."""
+    raw = (
+        '<thought>\nLet us analyze the evidence chunks carefully.\n</thought>\n'
+        '```json\n{\n  "answer": "Reasoned answer",\n  "claims": []\n}\n```'
+    )
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "Reasoned answer"
+
+
+def test_clean_json_prefers_schema_key_over_preliminary_dummy_json():
+    """Scanner prefers a candidate JSON containing schema keys ('answer' or 'supported') over dummy JSON."""
+    raw = (
+        'Here is my preliminary plan: {"step": "summarize", "ready": false}\n\n'
+        'Final grounded answer:\n'
+        '```json\n{\n  "answer": "Real synthesized answer",\n  "claims": []\n}\n```'
+    )
+    cleaned = _clean_json_response(raw)
+    parsed = json.loads(cleaned)
+    assert parsed["answer"] == "Real synthesized answer"
+
+
+def test_clean_json_plain_prose_fails_closed_at_char_0():
+    """Plain conversational refusal with no JSON brackets fails closed at char 0."""
+    raw = "Based on the provided excerpts, I cannot find sufficient evidence to answer this question."
+    cleaned = _clean_json_response(raw)
+    assert cleaned == raw
+    with pytest.raises(json.JSONDecodeError) as exc_info:
+        json.loads(cleaned)
+    assert "char 0" in str(exc_info.value)

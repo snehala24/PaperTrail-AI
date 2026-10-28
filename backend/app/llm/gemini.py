@@ -43,14 +43,20 @@ class GeminiProvider(LLMProvider):
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: float = 30.0,
+        timeout: Optional[float] = None,
         max_retries: int = 3,
         initial_delay: float = 1.0,
         max_delay: float = 10.0,
         backoff_factor: float = 2.0,
+        thinking_level: Optional[str] = None,
         client: Optional[Any] = None,
     ):
-        if timeout <= 0:
+        resolved_timeout = (
+            timeout
+            if timeout is not None
+            else getattr(settings, "gemini_timeout", 45.0)
+        )
+        if resolved_timeout <= 0:
             raise ValueError("timeout must be positive")
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
@@ -59,7 +65,7 @@ class GeminiProvider(LLMProvider):
         if backoff_factor < 1.0:
             raise ValueError("backoff_factor must be >= 1.0")
 
-        self.timeout = timeout
+        self.timeout = float(resolved_timeout)
         self.max_retries = max_retries
         self.initial_delay = initial_delay
         self.max_delay = max_delay
@@ -80,6 +86,15 @@ class GeminiProvider(LLMProvider):
                 "GEMINI_MODEL is not set in environment or configuration. Please configure GEMINI_MODEL."
             )
         self.model = resolved_model.strip()
+
+        # Configure thinking_level: if explicitly passed, use it;
+        # otherwise for gemini-3.6 models, default to configured gemini_thinking_level
+        if thinking_level is not None:
+            self.thinking_level = thinking_level
+        elif "gemini-3.6" in self.model.lower():
+            self.thinking_level = settings.gemini_thinking_level
+        else:
+            self.thinking_level = None
 
         if client is not None:
             self._client = client
@@ -171,37 +186,70 @@ class GeminiProvider(LLMProvider):
 
     def _is_retryable_error(self, exc: Exception) -> Tuple[bool, str]:
         """Determine whether an error is transient and retryable."""
-        if isinstance(exc, asyncio.TimeoutError):
-            return True, "Request timed out"
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            msg = str(exc).strip()
+            return True, msg if msg else "Request timed out"
 
         try:
             from google.genai import errors as genai_errors
+        except ImportError:
+            genai_errors = None
 
-            if isinstance(exc, genai_errors.ClientError):
+        try:
+            from google.genai._gaos.lib import compat_errors as gaos_compat_errors
+        except ImportError:
+            gaos_compat_errors = None
+
+        try:
+            import httpx
+        except ImportError:
+            httpx = None
+
+        # Check whether exc is an SDK or HTTP API error
+        is_sdk_error = False
+        if genai_errors and isinstance(exc, genai_errors.APIError):
+            is_sdk_error = True
+        elif gaos_compat_errors and isinstance(exc, gaos_compat_errors.APIError):
+            is_sdk_error = True
+        elif exc.__class__.__module__.startswith("google.genai.") and (
+            hasattr(exc, "status_code") or hasattr(exc, "code")
+        ):
+            is_sdk_error = True
+
+        is_httpx_status = bool(httpx and isinstance(exc, httpx.HTTPStatusError))
+
+        if is_sdk_error or is_httpx_status:
+            # Check explicit ServerError / ClientError subclasses from genai_errors
+            if genai_errors and isinstance(exc, genai_errors.ServerError):
+                code = getattr(exc, "code", None)
+                return True, f"Server error (HTTP {code})"
+
+            if genai_errors and isinstance(exc, genai_errors.ClientError):
                 code = getattr(exc, "code", None)
                 if code == 429:
                     return True, "Rate limit (HTTP 429)"
                 return False, f"Permanent client error (HTTP {code})"
 
-            if isinstance(exc, genai_errors.ServerError):
-                code = getattr(exc, "code", None)
-                return True, f"Server error (HTTP {code})"
+            # Extract numeric status code
+            status_code = getattr(exc, "status_code", None)
+            if status_code is None:
+                status_code = getattr(exc, "code", None)
+            if status_code is None and is_httpx_status and hasattr(exc, "response"):
+                status_code = getattr(exc.response, "status_code", None)
 
-            if isinstance(exc, genai_errors.APIError):
-                code = getattr(exc, "code", None)
-                if code in {408, 429, 500, 502, 503, 504}:
-                    return True, f"Transient API error (HTTP {code})"
-                return False, f"Permanent API error (HTTP {code})"
-        except ImportError:
-            pass
+            if isinstance(status_code, int):
+                if status_code == 429:
+                    return True, "Rate limit (HTTP 429)"
+                if status_code in {500, 502, 503, 504}:
+                    return True, f"Server error (HTTP {status_code})"
+                if 400 <= status_code < 500:
+                    return False, f"Permanent client error (HTTP {status_code})"
+                if 500 <= status_code < 600:
+                    return True, f"Server error (HTTP {status_code})"
+                return False, f"API error (HTTP {status_code})"
 
-        try:
-            import httpx
-
-            if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
-                return True, f"Transport/network error ({type(exc).__name__})"
-        except ImportError:
-            pass
+        if httpx and isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+            return True, f"Transport/network error ({type(exc).__name__})"
 
         if isinstance(exc, (ConnectionError, TimeoutError)):
             return True, f"Connection error ({type(exc).__name__})"
@@ -226,36 +274,67 @@ class GeminiProvider(LLMProvider):
         if not content and hasattr(interaction, "steps") and interaction.steps:
             parts: List[str] = []
             for step in interaction.steps:
-                step_content = getattr(step, "content", None)
-                if step_content:
-                    for c in step_content:
-                        text = getattr(c, "text", None)
-                        if text:
-                            parts.append(text)
+                step_type = getattr(step, "type", None)
+                if step_type == "model_output":
+                    step_content = getattr(step, "content", None)
+                    if step_content:
+                        for c in step_content:
+                            text = getattr(c, "text", None)
+                            if text:
+                                parts.append(text)
             if parts:
                 content = "".join(parts)
 
         if content is None or not content.strip():
             raise RuntimeError("Received empty response from Gemini API")
 
+        status = getattr(interaction, "status", None)
         usage = getattr(interaction, "usage", None)
         prompt_tokens = getattr(usage, "total_input_tokens", None) if usage else None
         completion_tokens = (
             getattr(usage, "total_output_tokens", None) if usage else None
         )
+        thought_tokens = (
+            getattr(usage, "total_thought_tokens", None) if usage else None
+        )
         total_tokens = getattr(usage, "total_tokens", None) if usage else None
+
+        # Determine finish reason from interaction status and token limits
+        finish_reason: Optional[str] = None
+        if status == "budget_exceeded":
+            finish_reason = "max_tokens"
+        elif (
+            completion_tokens is not None
+            and getattr(self, "_last_max_tokens", None) is not None
+            and completion_tokens >= self._last_max_tokens
+        ):
+            finish_reason = "max_tokens"
+        elif status == "incomplete":
+            finish_reason = "incomplete"
+        elif status == "completed":
+            finish_reason = "stop"
 
         model_name = getattr(interaction, "model", None) or self.model
         elapsed = time.perf_counter() - start_time
 
+        step_types = [
+            getattr(s, "type", "unknown")
+            for s in (getattr(interaction, "steps", None) or [])
+        ]
+
         logger.info(
-            "Gemini generation completed (model: %s, attempt: %d, elapsed: %.2fs, "
-            "prompt_tokens: %s, completion_tokens: %s, total_tokens: %s)",
+            "Gemini generation completed (model: %s, status: %s, finish_reason: %s, "
+            "step_types: %s, attempt: %d, elapsed: %.2fs, prompt_tokens: %s, "
+            "completion_tokens: %s, thought_tokens: %s, total_tokens: %s)",
             model_name,
+            status,
+            finish_reason,
+            step_types,
             attempt + 1,
             elapsed,
             prompt_tokens,
             completion_tokens,
+            thought_tokens,
             total_tokens,
         )
 
@@ -265,6 +344,9 @@ class GeminiProvider(LLMProvider):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            status=status,
+            finish_reason=finish_reason,
+            thought_tokens=thought_tokens,
         )
 
     async def _execute_with_timeout(self, coro: Any) -> Any:
@@ -275,7 +357,16 @@ class GeminiProvider(LLMProvider):
             loop = None
 
         if loop is not None:
-            return await asyncio.wait_for(coro, timeout=self.timeout)
+            # Outer grace buffer (5.0s) ensures the SDK/transport has priority to raise
+            # its own structured transport timeout before the coroutine is cancelled.
+            outer_grace = 5.0 if self.timeout >= 1.0 else max(0.01, self.timeout * 0.2)
+            outer_deadline = self.timeout + outer_grace
+            try:
+                return await asyncio.wait_for(coro, timeout=outer_deadline)
+            except (asyncio.TimeoutError, TimeoutError):
+                raise TimeoutError(
+                    f"Gemini API request exceeded outer deadline ({outer_deadline:.1f}s)"
+                )
         return await coro
 
     async def _sleep(self, delay: float) -> None:
@@ -293,6 +384,9 @@ class GeminiProvider(LLMProvider):
         messages: List[LLMMessage],
         temperature: float = 0.0,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Any] = None,
+        thinking_level: Optional[str] = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """
         Generate a response from Google Gemini given a list of messages.
@@ -302,18 +396,31 @@ class GeminiProvider(LLMProvider):
         if max_tokens is not None and max_tokens <= 0:
             raise ValueError(f"max_tokens must be positive, got {max_tokens}")
 
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else settings.gemini_max_output_tokens
+        )
+        self._last_max_tokens = effective_max_tokens
         system_instruction, input_payload = self._map_messages(messages)
 
-        kwargs: Dict[str, Any] = {
+        call_kwargs: Dict[str, Any] = {
             "model": self.model,
             "input": input_payload,
         }
         if system_instruction is not None:
-            kwargs["system_instruction"] = system_instruction
+            call_kwargs["system_instruction"] = system_instruction
+        if response_format is not None:
+            call_kwargs["response_format"] = response_format
 
         gen_config: Dict[str, Any] = {}
-        if max_tokens is not None:
-            gen_config["max_output_tokens"] = max_tokens
+        if effective_max_tokens is not None:
+            gen_config["max_output_tokens"] = effective_max_tokens
+
+        effective_thinking = (
+            thinking_level if thinking_level is not None else self.thinking_level
+        )
+        if effective_thinking is not None:
+            gen_config["thinking_level"] = effective_thinking
+
         if _supports_temperature(self.model) and temperature > 0.0:
             gen_config["temperature"] = temperature
         elif not _supports_temperature(self.model) and temperature > 0.0:
@@ -324,7 +431,7 @@ class GeminiProvider(LLMProvider):
             )
 
         if gen_config:
-            kwargs["generation_config"] = gen_config
+            call_kwargs["generation_config"] = gen_config
 
         start_time = time.perf_counter()
         last_exc: Optional[Exception] = None
@@ -334,7 +441,7 @@ class GeminiProvider(LLMProvider):
                 interaction = await self._execute_with_timeout(
                     self._client.aio.interactions.create(
                         timeout=self.timeout,
-                        **kwargs,
+                        **call_kwargs,
                     )
                 )
                 return self._build_response(interaction, attempt, start_time)

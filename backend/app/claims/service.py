@@ -23,6 +23,7 @@ from backend.app.citations.verifier import (
     _clean_json_response,
     sanitize_error_message,
 )
+from backend.app.core.config import settings
 from backend.app.llm.base import LLMMessage, LLMProvider, LLMResponse
 from backend.app.retrieval.hybrid import HybridRetriever, ensure_retriever_indexed, retriever as default_retriever
 from backend.app.schemas import (
@@ -56,7 +57,7 @@ Only extract factual information directly and explicitly stated in the evidence.
 ANSWERING AND GROUNDING RULES:
 1. Respond with a valid JSON object matching this schema:
    {
-     "answer": "Synthesized factual answer strictly supported by the evidence",
+     "answer": "Concise synthesized factual answer (1-3 sentences) strictly supported by the evidence",
      "claims": [
        {
          "claim_id": "claim_1",
@@ -74,11 +75,80 @@ ANSWERING AND GROUNDING RULES:
        }
      ]
    }
-2. Atomic Claims: Deconstruct your answer into atomic, verifiable factual claims. Every claim MUST cite at least one chunk ID from the provided evidence and MUST include an exact verbatim quote copied from that chunk.
+2. Atomic Claims & Evidence Selection:
+   - Deconstruct your answer into 2 to 4 atomic, verifiable factual claims.
+   - Cite only chunks that directly support the specific claim; prefer the smallest sufficient evidence set (typically 1 chunk per atomic claim).
+   - Under the verification contract, every cited chunk in chunk_ids must directly support the claim and contain the supplied verbatim quote.
+   - Do not add chunks merely because they discuss the same broader topic.
+   - Keep verbatim quotes concise and copied exactly from the cited chunk. Never invent quotes or chunk IDs.
 3. Strict Grounding: Do not extrapolate, hallucinate, or include external knowledge not present in the evidence.
 4. Abstention: If the evidence does not contain sufficient factual information to answer the question, or if all candidate evidence is irrelevant, set "abstained": true, provide an explicit "abstain_reason", and set "answer" to an honest explanation of what is missing.
 5. Conflicts: If the evidence from two chunks presents an apparent contradiction or disagreement, flag that sources disagree and identify both conflicting chunk IDs in "conflicts" (chunk_id_a and chunk_id_b). Do not provide detailed conflict analysis.
 6. Return only valid JSON. Do not include markdown code blocks or conversational text outside the JSON object."""
+
+
+ANSWER_GENERATOR_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "answer": {
+            "type": "string",
+            "description": "Concise synthesized factual answer (1-3 sentences) strictly supported by the evidence",
+        },
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_id": {"type": "string"},
+                    "text": {"type": "string"},
+                    "chunk_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "quote": {"type": "string"},
+                },
+                "required": ["claim_id", "text", "chunk_ids", "quote"],
+            },
+        },
+        "abstained": {"type": "boolean"},
+        "abstain_reason": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+        },
+        "conflicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "chunk_id_a": {"type": "string"},
+                    "chunk_id_b": {"type": "string"},
+                },
+                "required": ["chunk_id_a", "chunk_id_b"],
+            },
+        },
+    },
+    "required": ["answer", "claims", "abstained", "conflicts"],
+}
+
+
+def build_generator_response_format() -> Optional[Any]:
+    """
+    Construct TextResponseFormat enforcing the answer generator JSON schema.
+    Uses the official google-genai Interactions API types if available,
+    falling back to a dict specification conforming to the same wire schema.
+    """
+    try:
+        from google.genai._gaos.types.interactions import TextResponseFormat
+        return TextResponseFormat(
+            type="text",
+            mime_type="application/json",
+            schema_=ANSWER_GENERATOR_JSON_SCHEMA,
+        )
+    except Exception:
+        return {
+            "type": "text",
+            "mime_type": "application/json",
+            "schema": ANSWER_GENERATOR_JSON_SCHEMA,
+        }
 
 
 def _validate_generator_output(data: Any) -> Tuple[bool, Optional[str], Dict[str, Any]]:
@@ -132,11 +202,15 @@ def _validate_generator_output(data: Any) -> Tuple[bool, Optional[str], Dict[str
             return False, f"Duplicate claim_id '{cid}' detected in generator output", {}
         seen_claim_ids.add(cid)
 
-        text = str(c.get("text", "")).strip()
+        text = str(c.get("text") or c.get("claim_text") or "").strip()
         if not text:
             return False, f"Claim '{cid}' has missing or empty 'text'", {}
 
-        chunk_ids = c.get("chunk_ids")
+        chunk_ids = (
+            c.get("chunk_ids")
+            if c.get("chunk_ids") is not None
+            else c.get("citation_chunk_ids")
+        )
         if not isinstance(chunk_ids, list) or len(chunk_ids) == 0:
             return False, f"Claim '{cid}' has no cited chunk IDs (must cite at least one chunk)", {}
 
@@ -146,7 +220,7 @@ def _validate_generator_output(data: Any) -> Tuple[bool, Optional[str], Dict[str
                 return False, f"Claim '{cid}' contains an empty or non-string chunk ID", {}
             cleaned_chunk_ids.append(ch_id.strip())
 
-        quote = c.get("quote")
+        quote = c.get("quote") if c.get("quote") is not None else c.get("verbatim_quote")
         if not isinstance(quote, str) or not quote.strip():
             return False, f"Claim '{cid}' has missing or empty verbatim quote", {}
 
@@ -191,10 +265,16 @@ class AnswerService:
         retriever: Optional[HybridRetriever] = None,
         llm_provider: Optional[LLMProvider] = None,
         verifier: Optional[CitationVerifier] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         self.retriever = retriever if retriever is not None else default_retriever
         self.llm_provider = llm_provider
         self.verifier = verifier if verifier is not None else CitationVerifier(llm_provider=llm_provider)
+        self.max_output_tokens = (
+            max_output_tokens
+            if max_output_tokens is not None
+            else settings.gemini_max_output_tokens
+        )
 
     async def answer(self, req: AnswerRequest) -> AnswerResponse:
         """
@@ -290,7 +370,7 @@ class AnswerService:
             f"Research Question: {req.question}\n\n"
             f"Available Evidence Excerpts:\n"
             f"{evidence_str}\n\n"
-            f"Synthesize an evidence-grounded answer with atomic claims, chunk citations, and verbatim quotes. "
+            f"Synthesize a concise evidence-grounded answer (1-3 sentences) with 2 to 4 atomic claims, chunk citations, and short verbatim quotes. "
             f"Respond strictly in valid JSON matching the specified schema."
         )
 
@@ -303,10 +383,14 @@ class AnswerService:
             gen_resp: LLMResponse = await self.llm_provider.generate(
                 messages=messages,
                 temperature=0.0,
-                max_tokens=1024,
+                max_tokens=self.max_output_tokens,
+                response_format=build_generator_response_format(),
             )
         except Exception as exc:
             safe_err = sanitize_error_message(str(exc))
+            if not safe_err and isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                timeout_val = getattr(self.llm_provider, 'timeout', settings.gemini_timeout)
+                safe_err = f"Gemini API request exceeded {timeout_val}s timeout"
             logger.warning("LLM generation failed (%s): %s", type(exc).__name__, safe_err)
             timings["generation"] = round(time.perf_counter() - t1, 4)
             timings["total"] = round(time.perf_counter() - start_time, 4)
@@ -320,6 +404,33 @@ class AnswerService:
             )
 
         timings["generation"] = round(time.perf_counter() - t1, 4)
+
+        # Fail-closed check: if the generation was truncated or incomplete, do not evaluate partial output
+        is_truncated = (
+            getattr(gen_resp, "finish_reason", None) == "max_tokens"
+            or getattr(gen_resp, "status", None) in ("incomplete", "budget_exceeded")
+        )
+        if is_truncated:
+            timings["total"] = round(time.perf_counter() - start_time, 4)
+            logger.warning(
+                "LLM generation was truncated before completion (status: %s, finish_reason: %s, tokens: %s)",
+                getattr(gen_resp, "status", None),
+                getattr(gen_resp, "finish_reason", None),
+                getattr(gen_resp, "completion_tokens", None),
+            )
+            return AnswerResponse(
+                answer="I must abstain because the model generation was truncated before completion.",
+                evidence_links=[],
+                citation_checks=[],
+                status=AnswerStatus.ERROR,
+                abstain_reason=(
+                    f"LLM generation was truncated by token limit / budget "
+                    f"(status: {getattr(gen_resp, 'status', None)}, "
+                    f"finish_reason: {getattr(gen_resp, 'finish_reason', None)}, "
+                    f"completion_tokens: {getattr(gen_resp, 'completion_tokens', None)})"
+                ),
+                timings=timings,
+            )
 
         # Parse and strictly validate generator JSON output
         clean_raw = _clean_json_response(gen_resp.content)

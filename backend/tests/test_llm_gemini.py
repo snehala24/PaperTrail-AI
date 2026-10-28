@@ -699,3 +699,482 @@ def test_sdk_internal_retries_disabled_on_default_client():
     assert cfg is not None
     assert getattr(cfg.retry_config, "strategy", None) == "none"
     assert getattr(cfg.retry_config, "max_retries", None) == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: Transient Error Classification and Bounded Retries
+# ---------------------------------------------------------------------------
+
+
+def test_is_retryable_error_gaos_compat_internal_server_error_503():
+    """Observed SDK 503 InternalServerError is classified as retryable and retries within bounds."""
+    import httpx
+    from google.genai._gaos.lib import compat_errors
+
+    req = httpx.Request("POST", "http://test")
+    resp_503 = httpx.Response(503, request=req)
+    err_503 = compat_errors.InternalServerError(
+        "503 Service Unavailable: gemini-3.6-flash is currently experiencing high demand",
+        response=resp_503,
+        body={},
+    )
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        max_retries=2,
+        initial_delay=0.001,
+        max_delay=0.005,
+    )
+
+    is_retryable, reason = provider._is_retryable_error(err_503)
+    assert is_retryable is True
+    assert "503" in reason
+
+    # Test full generate loop: fails once with 503, succeeds on 2nd attempt
+    mock_interaction = make_mock_interaction(output_text="Success after 503 retry")
+    mock_client.aio.interactions.create = AsyncMock(
+        side_effect=[err_503, mock_interaction]
+    )
+
+    response = run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+    assert response.content == "Success after 503 retry"
+    assert mock_client.aio.interactions.create.await_count == 2
+
+
+def test_is_retryable_error_server_errors_500_502_504():
+    """Transient server errors 500, 502, and 504 are retryable."""
+    import httpx
+    from google.genai._gaos.lib import compat_errors
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+    )
+
+    req = httpx.Request("POST", "http://test")
+    for code in (500, 502, 504):
+        resp = httpx.Response(code, request=req)
+        err = compat_errors.APIError.generate(
+            status_code=code,
+            body={"error": {"code": code, "message": "Server error"}},
+            message=None,
+            response=resp,
+        )
+        is_retryable, reason = provider._is_retryable_error(err)
+        assert is_retryable is True, f"Expected {code} to be retryable"
+        assert str(code) in reason
+
+
+def test_is_retryable_error_permanent_4xx_not_retryable():
+    """Client errors (400, 401, 403, 404, 422) are non-transient and must never be retried."""
+    import httpx
+    from google.genai._gaos.lib import compat_errors
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        max_retries=2,
+    )
+
+    req = httpx.Request("POST", "http://test")
+    client_error_classes = [
+        (400, compat_errors.BadRequestError),
+        (401, compat_errors.AuthenticationError),
+        (403, compat_errors.PermissionDeniedError),
+        (404, compat_errors.NotFoundError),
+        (422, compat_errors.UnprocessableEntityError),
+    ]
+
+    for code, cls in client_error_classes:
+        resp = httpx.Response(code, request=req)
+        err = cls(f"HTTP {code} error", response=resp, body={})
+        is_retryable, reason = provider._is_retryable_error(err)
+        assert is_retryable is False, f"HTTP {code} should not be retryable"
+        assert "Permanent client error" in reason
+        assert str(code) in reason
+
+
+def test_is_retryable_error_arbitrary_exceptions_not_retryable():
+    """Arbitrary exceptions with status_code attribute or generic exceptions are not retried."""
+    mock_client = make_mock_client()
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+    )
+
+    class CustomErrorWithStatusCode(Exception):
+        status_code = 503
+
+    err = CustomErrorWithStatusCode("Not an SDK error")
+    is_retryable, reason = provider._is_retryable_error(err)
+    assert is_retryable is False
+    assert "Non-retryable exception" in reason
+
+    for generic in (ValueError("invalid"), TypeError("type error"), RuntimeError("runtime")):
+        is_retryable, reason = provider._is_retryable_error(generic)
+        assert is_retryable is False
+        assert "Non-retryable exception" in reason
+
+
+def test_retry_count_bounded_at_configured_maximum():
+    """Provider never exceeds configured max_retries on persistent 503 errors."""
+    import httpx
+    from google.genai._gaos.lib import compat_errors
+
+    req = httpx.Request("POST", "http://test")
+    resp_503 = httpx.Response(503, request=req)
+    err_503 = compat_errors.InternalServerError(
+        "503 Service Unavailable",
+        response=resp_503,
+        body={},
+    )
+
+    mock_client = make_mock_client()
+    mock_client.aio.interactions.create = AsyncMock(side_effect=err_503)
+
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        max_retries=2,
+        initial_delay=0.001,
+        max_delay=0.005,
+    )
+
+    with pytest.raises(compat_errors.InternalServerError):
+        run_sync(provider.generate([LLMMessage(role="user", content="Test persistent 503")]))
+
+    # 1 initial attempt + 2 retries = 3 total attempts
+    assert mock_client.aio.interactions.create.await_count == 3
+
+
+def test_timeout_enforced_across_retry_attempts():
+    """Per-attempt timeout argument is consistently passed to interactions.create on all attempts."""
+    import httpx
+    from google.genai._gaos.lib import compat_errors
+
+    req = httpx.Request("POST", "http://test")
+    resp_503 = httpx.Response(503, request=req)
+    err_503 = compat_errors.InternalServerError("503", response=resp_503, body={})
+    mock_interaction = make_mock_interaction(output_text="Success on attempt 2")
+
+    mock_client = make_mock_client()
+    mock_client.aio.interactions.create = AsyncMock(
+        side_effect=[err_503, mock_interaction]
+    )
+
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        timeout=15.0,
+        max_retries=2,
+        initial_delay=0.001,
+        max_delay=0.005,
+    )
+
+    response = run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+    assert response.content == "Success on attempt 2"
+    assert mock_client.aio.interactions.create.await_count == 2
+
+    # Check timeout kwarg was passed in all calls
+    for call_args in mock_client.aio.interactions.create.call_args_list:
+        assert call_args.kwargs.get("timeout") == 15.0
+
+
+def test_interaction_steps_only_extracts_model_output():
+    """Fallback step extraction never leaks user_input or thought steps into response content."""
+    user_step = SimpleNamespace(
+        type="user_input",
+        content=[SimpleNamespace(text="User prompt that must never leak")],
+    )
+    thought_step = SimpleNamespace(
+        type="thought",
+        content=[SimpleNamespace(text="Internal model thought reasoning")],
+    )
+    model_step = SimpleNamespace(
+        type="model_output",
+        content=[SimpleNamespace(text='{"answer": "Verified output", "claims": []}')],
+    )
+    mock_interaction = SimpleNamespace(
+        output_text="",
+        model="gemini-3.6-flash",
+        usage=None,
+        steps=[user_step, thought_step, model_step],
+    )
+    mock_client = make_mock_client(return_value=mock_interaction)
+    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+
+    response = run_sync(provider.generate([LLMMessage(role="user", content="Question")]))
+    assert response.content == '{"answer": "Verified output", "claims": []}'
+    assert "User prompt" not in response.content
+    assert "Internal model thought" not in response.content
+
+
+def test_interaction_steps_without_model_output_raises_empty_response():
+    """If interaction only contains user_input or thought steps and no model_output, raises RuntimeError."""
+    user_step = SimpleNamespace(
+        type="user_input",
+        content=[SimpleNamespace(text="User prompt")],
+    )
+    thought_step = SimpleNamespace(
+        type="thought",
+        content=[SimpleNamespace(text="Internal model thought")],
+    )
+    mock_interaction = SimpleNamespace(
+        output_text=None,
+        model="gemini-3.6-flash",
+        usage=None,
+        steps=[user_step, thought_step],
+    )
+    mock_client = make_mock_client(return_value=mock_interaction)
+    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_sync(provider.generate([LLMMessage(role="user", content="Question")]))
+    assert "empty response" in str(exc_info.value).lower()
+
+
+def test_build_response_completed_status_sets_stop_finish_reason():
+    """interaction.status == 'completed' sets finish_reason='stop'."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "ok"}',
+        status="completed",
+        model="gemini-3.6-flash",
+        usage=SimpleNamespace(
+            total_input_tokens=50,
+            total_output_tokens=100,
+            total_tokens=150,
+            total_thought_tokens=20,
+        ),
+        steps=[],
+    )
+    provider = GeminiProvider(api_key="test-api-key", client=make_mock_client(return_value=mock_interaction))
+    resp = run_sync(provider.generate([LLMMessage(role="user", content="Hi")], max_tokens=1024))
+    assert resp.status == "completed"
+    assert resp.finish_reason == "stop"
+    assert resp.thought_tokens == 20
+
+
+def test_build_response_incomplete_status():
+    """interaction.status == 'incomplete' sets finish_reason='incomplete'."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "partial',
+        status="incomplete",
+        model="gemini-3.6-flash",
+        usage=SimpleNamespace(total_input_tokens=50, total_output_tokens=100, total_tokens=150),
+        steps=[],
+    )
+    provider = GeminiProvider(api_key="test-api-key", client=make_mock_client(return_value=mock_interaction))
+    resp = run_sync(provider.generate([LLMMessage(role="user", content="Hi")], max_tokens=1024))
+    assert resp.status == "incomplete"
+    assert resp.finish_reason == "incomplete"
+
+
+def test_build_response_budget_exceeded_status():
+    """interaction.status == 'budget_exceeded' sets finish_reason='max_tokens'."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "partial',
+        status="budget_exceeded",
+        model="gemini-3.6-flash",
+        usage=SimpleNamespace(total_input_tokens=50, total_output_tokens=500, total_tokens=550),
+        steps=[],
+    )
+    provider = GeminiProvider(api_key="test-api-key", client=make_mock_client(return_value=mock_interaction))
+    resp = run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+    assert resp.status == "budget_exceeded"
+    assert resp.finish_reason == "max_tokens"
+
+
+def test_build_response_tokens_reach_max_tokens_sets_max_tokens():
+    """When completion_tokens reaches configured max_tokens, finish_reason='max_tokens'."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "hit limit',
+        status="completed",
+        model="gemini-3.6-flash",
+        usage=SimpleNamespace(total_input_tokens=50, total_output_tokens=1024, total_tokens=1074),
+        steps=[],
+    )
+    provider = GeminiProvider(api_key="test-api-key", client=make_mock_client(return_value=mock_interaction))
+    resp = run_sync(provider.generate([LLMMessage(role="user", content="Hi")], max_tokens=1024))
+    assert resp.finish_reason == "max_tokens"
+
+
+def test_build_response_missing_status_and_usage_handled_gracefully():
+    """Interaction without status or usage fields defaults to None without crashing."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "ok"}',
+        model="gemini-3.6-flash",
+        steps=[],
+    )
+    provider = GeminiProvider(api_key="test-api-key", client=make_mock_client(return_value=mock_interaction))
+    resp = run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+    assert resp.status is None
+    assert resp.finish_reason is None
+    assert resp.prompt_tokens is None
+    assert resp.completion_tokens is None
+
+def test_settings_gemini_defaults_and_validation():
+    """Verify default Gemini settings, valid custom assignments, and invalid rejections."""
+    from backend.app.core.config import Settings
+
+    # Defaults
+    s = Settings()
+    assert s.gemini_max_output_tokens == 2048
+    assert s.gemini_thinking_level == "minimal"
+    assert s.gemini_timeout == 45.0
+
+    # Custom valid values
+    s_custom = Settings(gemini_max_output_tokens=4096, gemini_thinking_level="low", gemini_timeout=60.0)
+    assert s_custom.gemini_max_output_tokens == 4096
+    assert s_custom.gemini_thinking_level == "low"
+    assert s_custom.gemini_timeout == 60.0
+
+    # Null / empty thinking level
+    s_none = Settings(gemini_thinking_level="none")
+    assert s_none.gemini_thinking_level is None
+
+    # Invalid tokens
+    with pytest.raises(ValueError):
+        Settings(gemini_max_output_tokens=0)
+    with pytest.raises(ValueError):
+        Settings(gemini_max_output_tokens=-100)
+    with pytest.raises(ValueError):
+        Settings(gemini_max_output_tokens="invalid_number")
+
+    # Invalid thinking level
+    with pytest.raises(ValueError):
+        Settings(gemini_thinking_level="ultra_high")
+
+    # Invalid timeout
+    with pytest.raises(ValueError):
+        Settings(gemini_timeout=0)
+    with pytest.raises(ValueError):
+        Settings(gemini_timeout=-10.0)
+    with pytest.raises(ValueError):
+        Settings(gemini_timeout="not_a_float")
+
+
+def test_gemini_provider_passes_thinking_level_and_2048_budget_to_sdk():
+    """GeminiProvider passes thinking_level='minimal' and default 2048 budget to SDK generation_config."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "ok"}',
+        status="completed",
+        model="gemini-3.6-flash",
+        steps=[],
+    )
+    mock_client = make_mock_client(return_value=mock_interaction)
+    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+
+    run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+
+    call_args = mock_client.aio.interactions.create.call_args
+    assert call_args is not None
+    kwargs = call_args.kwargs
+    assert "generation_config" in kwargs
+    gen_cfg = kwargs["generation_config"]
+    max_out = getattr(gen_cfg, "max_output_tokens", None) or (gen_cfg.get("max_output_tokens") if isinstance(gen_cfg, dict) else None)
+    thinking = getattr(gen_cfg, "thinking_level", None) or (gen_cfg.get("thinking_level") if isinstance(gen_cfg, dict) else None)
+    assert max_out == 2048
+    assert thinking == "minimal"
+
+
+def test_gemini_provider_custom_thinking_level_and_max_tokens():
+    """GeminiProvider respects per-request thinking_level and max_tokens overrides."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "ok"}',
+        status="completed",
+        model="gemini-3.6-flash",
+        steps=[],
+    )
+    mock_client = make_mock_client(return_value=mock_interaction)
+    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+
+    run_sync(provider.generate(
+        [LLMMessage(role="user", content="Hi")],
+        max_tokens=4096,
+        thinking_level="low",
+    ))
+
+    call_args = mock_client.aio.interactions.create.call_args
+    kwargs = call_args.kwargs
+    gen_cfg = kwargs["generation_config"]
+    max_out = getattr(gen_cfg, "max_output_tokens", None) or (gen_cfg.get("max_output_tokens") if isinstance(gen_cfg, dict) else None)
+    thinking = getattr(gen_cfg, "thinking_level", None) or (gen_cfg.get("thinking_level") if isinstance(gen_cfg, dict) else None)
+    assert max_out == 4096
+    assert thinking == "low"
+
+
+def test_gemini_provider_passes_response_format_to_sdk():
+    """GeminiProvider passes response_format directly to the SDK request kwargs."""
+    mock_interaction = SimpleNamespace(
+        output_text='{"answer": "ok"}',
+        status="completed",
+        model="gemini-3.6-flash",
+        steps=[],
+    )
+    mock_client = make_mock_client(return_value=mock_interaction)
+    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+
+    test_rf = {"type": "text", "mime_type": "application/json", "schema": {"type": "object"}}
+    run_sync(provider.generate(
+        [LLMMessage(role="user", content="Hi")],
+        response_format=test_rf,
+    ))
+
+    call_args = mock_client.aio.interactions.create.call_args
+    kwargs = call_args.kwargs
+    assert "response_format" in kwargs
+    assert kwargs["response_format"] == test_rf
+
+def test_gemini_provider_defaults_to_settings_timeout():
+    """GeminiProvider defaults to settings.gemini_timeout (45.0s) and passes it to SDK interactions.create."""
+    mock_interaction = make_mock_interaction(output_text="Test timeout default")
+    mock_client = make_mock_client(return_value=mock_interaction)
+    provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
+    assert provider.timeout == 45.0
+    run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+    assert mock_client.aio.interactions.create.call_args.kwargs["timeout"] == 45.0
+
+
+def test_gemini_provider_outer_grace_timeout_descriptive_message():
+    """When outer timeout fires, it raises a descriptive, sanitized TimeoutError with deadline."""
+    mock_client = make_mock_client(
+        side_effect=TimeoutError("Gemini API request exceeded outer deadline (50.0s)")
+    )
+    provider = GeminiProvider(
+        api_key="test-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        timeout=45.0,
+        max_retries=0,
+    )
+    with pytest.raises(TimeoutError) as exc_info:
+        run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+    assert "exceeded outer deadline" in str(exc_info.value)
+    assert "test-key" not in str(exc_info.value)
+
+
+def test_gemini_provider_outer_grace_allows_sdk_transport_timeout_first():
+    """SDK transport timeout is received directly before outer timeout cancels it."""
+    import httpx
+    req = httpx.Request("POST", "http://test")
+    transport_err = httpx.ReadTimeout("Read timed out on socket", request=req)
+    mock_client = make_mock_client(side_effect=transport_err)
+    provider = GeminiProvider(
+        api_key="test-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        timeout=45.0,
+        max_retries=0,
+    )
+    with pytest.raises(httpx.ReadTimeout):
+        run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))

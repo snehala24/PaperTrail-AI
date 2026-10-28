@@ -100,15 +100,177 @@ VERIFICATION RULES:
 4. Do not include markdown code fences or conversational text outside the JSON object."""
 
 
+def _normalize_json_control_chars(s: str) -> str:
+    """
+    Escape raw, unescaped ASCII control characters (0-31) strictly inside JSON string literals.
+
+    Preserves all characters and whitespace outside strings, and correctly respects escaped
+    quotes and backslashes. Does not repair unclosed strings or structural errors.
+    """
+    if not isinstance(s, str) or not s:
+        return "" if s is None else s
+
+    out: List[str] = []
+    in_string = False
+    escape = False
+
+    for ch in s:
+        if not in_string:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+        else:
+            if escape:
+                escape = False
+                out.append(ch)
+            elif ch == '\\':
+                escape = True
+                out.append(ch)
+            elif ch == '"':
+                in_string = False
+                out.append(ch)
+            elif ord(ch) < 32:
+                if ch == '\n':
+                    out.append('\\n')
+                elif ch == '\r':
+                    out.append('\\r')
+                elif ch == '\t':
+                    out.append('\\t')
+                elif ch == '\b':
+                    out.append('\\b')
+                elif ch == '\f':
+                    out.append('\\f')
+                else:
+                    out.append(f'\\u{ord(ch):04x}')
+            else:
+                out.append(ch)
+
+    return ''.join(out)
+
+
+def _extract_first_balanced_json(s: str) -> Optional[str]:
+    """
+    Brace-aware scanner that finds a complete, balanced JSON object in a string.
+    Respects quotes, escaped quotes, and nested braces. Prefers candidates
+    matching known domain schema keys ("answer" or "supported").
+    """
+    if not isinstance(s, str) or not s:
+        return None
+
+    i = 0
+    n = len(s)
+    first_candidate = None
+    preferred_candidate = None
+
+    while i < n:
+        if s[i] == "{":
+            brace_depth = 0
+            in_string = False
+            escape = False
+            start = i
+            for j in range(i, n):
+                ch = s[j]
+                if not in_string:
+                    if ch == "{":
+                        brace_depth += 1
+                    elif ch == "}":
+                        brace_depth -= 1
+                        if brace_depth == 0:
+                            candidate = s[start : j + 1]
+                            norm_cand = _normalize_json_control_chars(candidate)
+                            if first_candidate is None:
+                                first_candidate = norm_cand
+                            try:
+                                parsed = json.loads(norm_cand)
+                                if isinstance(parsed, dict) and (
+                                    "answer" in parsed or "supported" in parsed
+                                ):
+                                    return norm_cand
+                                if preferred_candidate is None:
+                                    preferred_candidate = norm_cand
+                            except json.JSONDecodeError:
+                                break
+                    elif ch == '"':
+                        in_string = True
+                else:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+        i += 1
+    return preferred_candidate or first_candidate
+
+
 def _clean_json_response(content: str) -> str:
     """Strip markdown code blocks or surrounding text to extract clean JSON."""
+    if not isinstance(content, str):
+        return ""
     c = content.strip()
-    if c.startswith("```"):
-        # Match opening ```json or ``` and strip closing ```
-        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", c)
-        if match:
-            return match.group(1).strip()
-    return c
+    if not c:
+        return ""
+
+    # Strip thinking blocks if present at the start (e.g. <think>...</think> or <thought>...</thought>)
+    c = re.sub(
+        r"^<(?:think|thought)>[\s\S]*?</(?:think|thought)>\s*",
+        "",
+        c,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # 1. Plain valid JSON object (fast path)
+    if c.startswith("{") and c.endswith("}"):
+        try:
+            json.loads(c)
+            return c
+        except json.JSONDecodeError:
+            norm_c = _normalize_json_control_chars(c)
+            try:
+                json.loads(norm_c)
+                return norm_c
+            except json.JSONDecodeError:
+                pass
+
+    # 2. Markdown fenced code block: ```json ... ``` or ``` ... ```
+    # Harmless explanatory text may precede or follow the fence.
+    fence_match = re.search(r"```+(?:json)?\s*([\s\S]*?)\s*```+", c, re.IGNORECASE)
+    if fence_match:
+        fenced = fence_match.group(1).strip()
+        if fenced:
+            extracted = _extract_first_balanced_json(fenced)
+            if extracted is not None:
+                return extracted
+            first_brace = fenced.find("{")
+            if first_brace != -1:
+                return _normalize_json_control_chars(fenced[first_brace:])
+            return _normalize_json_control_chars(fenced)
+
+    # 3. Unclosed markdown fence: ```json\n... without closing ```
+    unclosed_match = re.search(r"```+(?:json)?\s*([\s\S]*)", c, re.IGNORECASE)
+    if unclosed_match:
+        inner = unclosed_match.group(1).strip()
+        if inner:
+            extracted = _extract_first_balanced_json(inner)
+            if extracted is not None:
+                return extracted
+            first_brace = inner.find("{")
+            if first_brace != -1:
+                return _normalize_json_control_chars(inner[first_brace:])
+
+    # 4. Brace-aware extraction from surrounding text or unclosed fence
+    extracted = _extract_first_balanced_json(c)
+    if extracted is not None:
+        return extracted
+
+    # 5. If text contains a '{', strip leading non-JSON preamble so json.loads
+    # can evaluate the JSON candidate directly
+    first_brace = c.find("{")
+    if first_brace != -1:
+        return _normalize_json_control_chars(c[first_brace:])
+
+    # Fallback to stripped content so json.loads produces a clean JSONDecodeError
+    return _normalize_json_control_chars(c)
 
 
 def _to_chunk_dict(retrieved_chunks: Union[Sequence[Any], Dict[str, Any]]) -> Dict[str, Any]:
