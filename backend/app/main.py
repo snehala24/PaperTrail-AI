@@ -6,6 +6,7 @@ from backend.app.retrieval.hybrid import ensure_retriever_indexed
 from backend.app.api.health import router as health_router
 from backend.app.api.documents import router as documents_router
 from backend.app.api.search import router as search_router
+from backend.app.api.answer import router as answer_router
 
 
 @asynccontextmanager
@@ -36,3 +37,4 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(documents_router)
 app.include_router(search_router)
+app.include_router(answer_router)

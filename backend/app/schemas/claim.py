@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -11,11 +11,30 @@ class EvidenceRelation(str, Enum):
     INSUFFICIENT = "insufficient"
 
 
+class ClaimVerificationStatus(str, Enum):
+    VERIFIED = "verified"
+    UNSUPPORTED = "unsupported"
+    INVALID_REFERENCE = "invalid_reference"
+    UNVERIFIED = "unverified"
+
+
 class Claim(BaseModel):
     """Data contract representing an atomic statement or claim extracted from an answer."""
     claim_id: str = Field(..., description="Unique identifier for the claim")
     answer_id: str = Field(..., description="Identifier of the answer containing this claim")
     text: str = Field(..., min_length=1, description="Atomic claim statement text")
+    chunk_ids: List[str] = Field(
+        default_factory=list,
+        description="List of cited context chunk IDs supporting this claim"
+    )
+    quote: Optional[str] = Field(
+        default=None,
+        description="Short verbatim evidence quote extracted from cited chunk"
+    )
+    status: ClaimVerificationStatus = Field(
+        default=ClaimVerificationStatus.UNVERIFIED,
+        description="Verification status outcome for this claim"
+    )
 
 
 class EvidenceLink(BaseModel):
