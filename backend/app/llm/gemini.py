@@ -7,7 +7,9 @@ Uses the official google-genai SDK's Interactions API
 
 import asyncio
 import logging
+import os
 import random
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +17,76 @@ from backend.app.core.config import settings
 from backend.app.llm.base import LLMMessage, LLMProvider, LLMResponse
 
 logger = logging.getLogger(__name__)
+
+
+def extract_error_text_payload(err: Exception) -> str:
+    """Extract and concatenate text representations from all available SDK exception attributes."""
+    parts = [str(err)]
+    msg = getattr(err, "message", None)
+    if isinstance(msg, str) and msg:
+        parts.append(msg)
+    body = getattr(err, "body", None)
+    if body is not None:
+        parts.append(str(body))
+    resp_json = getattr(err, "response_json", None)
+    if resp_json is not None:
+        parts.append(str(resp_json))
+    args = getattr(err, "args", None)
+    if args:
+        for a in args:
+            if a:
+                parts.append(str(a))
+    resp = getattr(err, "response", None)
+    if resp is not None:
+        resp_text = getattr(resp, "text", None)
+        if isinstance(resp_text, str) and resp_text:
+            parts.append(resp_text)
+    return " ".join(parts)
+
+
+def is_daily_quota_exhausted(err: Exception) -> bool:
+    """
+    Detect whether an exception indicates daily quota exhaustion or an extended quota reset window.
+    Reliably distinguishes daily quota limits from transient per-minute rate limits.
+    """
+    text = extract_error_text_payload(err).lower()
+
+    # Supporting quota context: must be present so arbitrary text (e.g. 'office hours') never matches
+    has_quota_context = any(
+        ctx in text
+        for ctx in ("quota", "limit", "exhaust", "rate", "429", "resource")
+    )
+    if not has_quota_context:
+        return False
+
+    # 1. Direct explicit daily quota / free-tier indicators
+    daily_direct_keywords = (
+        "requests/day",
+        "request/day",
+        "per day",
+        "per_day",
+        "daily",
+        "limit of 20 requests",
+        "free-tier limit",
+        "free_tier limit",
+        "free tier limit",
+        "generate_content_requests_per_day",
+        "requests_per_day",
+    )
+    if any(k in text for k in daily_direct_keywords):
+        return True
+
+    # 2. Extended reset window indicating hours (e.g., 'wait 21h0m0s', 'wait 21 hours', 'retry after 18h')
+    has_long_wait_window = bool(
+        re.search(
+            r"(?:wait|retry[ _-]?after|reset in)\s*(?:approx(?:imately)?\s*)?(\d+)\s*(?:h(?:ours?|rs?|\b|\d)|hr\b)",
+            text,
+        )
+    )
+    if has_long_wait_window:
+        return True
+
+    return False
 
 
 def _supports_temperature(model_name: str) -> bool:
@@ -58,7 +130,12 @@ class GeminiProvider(LLMProvider):
         )
         if resolved_timeout <= 0:
             raise ValueError("timeout must be positive")
-        if max_retries < 0:
+        resolved_max_retries = (
+            int(os.environ["GEMINI_MAX_RETRIES"])
+            if "GEMINI_MAX_RETRIES" in os.environ
+            else max_retries
+        )
+        if resolved_max_retries < 0:
             raise ValueError("max_retries must be non-negative")
         if initial_delay <= 0 or max_delay <= 0:
             raise ValueError("retry delays must be positive")
@@ -66,7 +143,7 @@ class GeminiProvider(LLMProvider):
             raise ValueError("backoff_factor must be >= 1.0")
 
         self.timeout = float(resolved_timeout)
-        self.max_retries = max_retries
+        self.max_retries = resolved_max_retries
         self.initial_delay = initial_delay
         self.max_delay = max_delay
         self.backoff_factor = backoff_factor
@@ -204,6 +281,26 @@ class GeminiProvider(LLMProvider):
             import httpx
         except ImportError:
             httpx = None
+
+        # Check for APITimeoutError from google-genai SDK
+        if (
+            (gaos_compat_errors and hasattr(gaos_compat_errors, "APITimeoutError") and isinstance(exc, gaos_compat_errors.APITimeoutError))
+            or (genai_errors and hasattr(genai_errors, "APITimeoutError") and isinstance(exc, genai_errors.APITimeoutError))
+            or exc.__class__.__name__ == "APITimeoutError"
+        ):
+            msg = str(exc).strip()
+            return True, msg if msg else "Request timed out (APITimeoutError)"
+
+        # Check for explicit daily quota exhaustion across all exception representations
+        if is_daily_quota_exhausted(exc):
+            return False, "Daily quota exhausted (HTTP 429)"
+
+        # Check for RateLimitError from google-genai GAOS SDK
+        if (
+            (gaos_compat_errors and hasattr(gaos_compat_errors, "RateLimitError") and isinstance(exc, gaos_compat_errors.RateLimitError))
+            or exc.__class__.__name__ == "RateLimitError"
+        ):
+            return True, "Rate limit (HTTP 429)"
 
         # Check whether exc is an SDK or HTTP API error
         is_sdk_error = False

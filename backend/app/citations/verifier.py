@@ -10,9 +10,10 @@ Layer 3: Separate temperature-0 LLM entailment verification (with untrusted pape
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Sequence, Set, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from backend.app.llm.base import LLMMessage, LLMProvider, LLMResponse
+from backend.app.llm.gemini import is_daily_quota_exhausted
 from backend.app.schemas import (
     CitationCheck,
     Claim,
@@ -97,7 +98,8 @@ VERIFICATION RULES:
    {"supported": false, "rationale": "Concise factual reason"}
 2. "supported" must be true ONLY if the evidence directly and unambiguously entails the claim.
 3. If the evidence merely mentions related concepts, contradicts the claim, or requires speculative leaps, "supported" must be false.
-4. Do not include markdown code fences or conversational text outside the JSON object."""
+4. Method Attribution Integrity: If a claim attributes a specific method, algorithm, or experimental result to a named paper or system (e.g. 'LEMS proposes...'), the cited evidence must explicitly connect that method to that named paper/system (via explicit naming or clear self-reference like 'we propose', 'our method'). A passage merely describing an algorithm (e.g. 'KFAC-SVD') or baseline without identifying it as the cited paper's method does NOT entail a claim asserting that the paper proposes or uses it.
+5. Do not include markdown code fences or conversational text outside the JSON object."""
 
 
 def _normalize_json_control_chars(s: str) -> str:
@@ -297,7 +299,7 @@ class CitationVerifier:
     def __init__(self, llm_provider: Optional[LLMProvider] = None):
         self.llm_provider = llm_provider
 
-    async def verify_citation(
+    def check_deterministic(
         self,
         claim_id: str,
         claim_text: str,
@@ -305,31 +307,31 @@ class CitationVerifier:
         quote: Optional[str] = None,
         retrieved_chunks: Union[Sequence[Any], Dict[str, Any]] = (),
         doc_ids: Optional[Sequence[str]] = None,
-    ) -> CitationCheck:
+    ) -> Tuple[Optional[CitationCheck], Optional[Any]]:
         """
-        Verify a single citation through the three-layer verification pipeline.
+        Run Layer 1 (retrieved-set membership & document filter) and
+        Layer 2 (exact normalized verbatim quote match).
 
-        Returns a CitationCheck object with audit details and status:
-        - invalid_reference: Chunk is absent from retrieved evidence set or violates doc_ids filter
-        - unsupported: Quote is missing, quote doesn't match chunk text, or LLM entailment is false
-        - unverified: LLM verification encountered an error, timeout, or malformed response
-        - verified: Passed all three layers (retrieved membership, quote match, and entailment)
+        Returns:
+            (CitationCheck, None) if a deterministic check failed (INVALID_REFERENCE or UNSUPPORTED).
+            (None, chunk_obj) if deterministic checks passed.
         """
         chunk_map = _to_chunk_dict(retrieved_chunks)
 
         # -------------------------------------------------------------
         # Layer 1: Retrieved Evidence Set Membership & Document Filter
         # -------------------------------------------------------------
-        # Must exist in the actual evidence set returned for THIS request.
-        # General corpus existence is explicitly insufficient.
         if chunk_id not in chunk_map:
-            return CitationCheck(
-                claim_id=claim_id,
-                chunk_id=chunk_id,
-                exists=False,
-                supports=None,
-                status=ClaimVerificationStatus.INVALID_REFERENCE,
-                notes=f"Layer 1 failure: Chunk '{chunk_id}' is not in the request's retrieved evidence set ({len(chunk_map)} chunks).",
+            return (
+                CitationCheck(
+                    claim_id=claim_id,
+                    chunk_id=chunk_id,
+                    exists=False,
+                    supports=None,
+                    status=ClaimVerificationStatus.INVALID_REFERENCE,
+                    notes=f"Layer 1 failure: Chunk '{chunk_id}' is not in the request's retrieved evidence set ({len(chunk_map)} chunks).",
+                ),
+                None,
             )
 
         chunk = chunk_map[chunk_id]
@@ -338,16 +340,18 @@ class CitationVerifier:
         if doc_ids is not None:
             allowed_docs: Set[str] = set(doc_ids)
             if chunk_doc_id not in allowed_docs:
-                return CitationCheck(
-                    claim_id=claim_id,
-                    chunk_id=chunk_id,
-                    exists=False,
-                    supports=None,
-                    status=ClaimVerificationStatus.INVALID_REFERENCE,
-                    notes=f"Layer 1 failure: Chunk '{chunk_id}' belongs to doc '{chunk_doc_id}', which is excluded by the doc_ids filter.",
+                return (
+                    CitationCheck(
+                        claim_id=claim_id,
+                        chunk_id=chunk_id,
+                        exists=False,
+                        supports=None,
+                        status=ClaimVerificationStatus.INVALID_REFERENCE,
+                        notes=f"Layer 1 failure: Chunk '{chunk_id}' belongs to doc '{chunk_doc_id}', which is excluded by the doc_ids filter.",
+                    ),
+                    None,
                 )
 
-        # Layer 1 passed: chunk exists in retrieved set and complies with filter
         exists = True
 
         # -------------------------------------------------------------
@@ -355,13 +359,16 @@ class CitationVerifier:
         # -------------------------------------------------------------
         quote_str = (quote or "").strip()
         if not quote_str:
-            return CitationCheck(
-                claim_id=claim_id,
-                chunk_id=chunk_id,
-                exists=exists,
-                supports=False,
-                status=ClaimVerificationStatus.UNSUPPORTED,
-                notes="Layer 2 failure: Verbatim quote is missing or empty.",
+            return (
+                CitationCheck(
+                    claim_id=claim_id,
+                    chunk_id=chunk_id,
+                    exists=exists,
+                    supports=False,
+                    status=ClaimVerificationStatus.UNSUPPORTED,
+                    notes="Layer 2 failure: Verbatim quote is missing or empty.",
+                ),
+                None,
             )
 
         chunk_text = getattr(chunk, "text", "") or ""
@@ -369,29 +376,46 @@ class CitationVerifier:
         norm_chunk = normalize_text_span(chunk_text)
 
         if not norm_quote:
-            return CitationCheck(
-                claim_id=claim_id,
-                chunk_id=chunk_id,
-                exists=exists,
-                supports=False,
-                status=ClaimVerificationStatus.UNSUPPORTED,
-                notes="Layer 2 failure: Quote normalized to empty string.",
+            return (
+                CitationCheck(
+                    claim_id=claim_id,
+                    chunk_id=chunk_id,
+                    exists=exists,
+                    supports=False,
+                    status=ClaimVerificationStatus.UNSUPPORTED,
+                    notes="Layer 2 failure: Quote normalized to empty string.",
+                ),
+                None,
             )
 
         # Exact substring match on normalized text (no fuzzy matching)
         if norm_quote not in norm_chunk:
-            return CitationCheck(
-                claim_id=claim_id,
-                chunk_id=chunk_id,
-                exists=exists,
-                supports=False,
-                status=ClaimVerificationStatus.UNSUPPORTED,
-                notes=f"Layer 2 failure: Verbatim quote '{quote_str}' was not found in chunk '{chunk_id}' text.",
+            return (
+                CitationCheck(
+                    claim_id=claim_id,
+                    chunk_id=chunk_id,
+                    exists=exists,
+                    supports=False,
+                    status=ClaimVerificationStatus.UNSUPPORTED,
+                    notes=f"Layer 2 failure: Verbatim quote '{quote_str}' was not found in chunk '{chunk_id}' text.",
+                ),
+                None,
             )
 
-        # -------------------------------------------------------------
-        # Layer 3: Separate Temperature-0 Entailment Verification
-        # -------------------------------------------------------------
+        return (None, chunk)
+
+    async def _verify_semantic(
+        self,
+        claim_id: str,
+        claim_text: str,
+        chunk_id: str,
+        quote_str: str,
+        chunk_text: str,
+        exists: bool = True,
+    ) -> CitationCheck:
+        """
+        Layer 3: Separate Temperature-0 Entailment Verification with untrusted evidence boundaries.
+        """
         if self.llm_provider is None:
             return CitationCheck(
                 claim_id=claim_id,
@@ -470,6 +494,12 @@ class CitationVerifier:
                 type(exc).__name__,
                 safe_err,
             )
+            err_lower = safe_err.lower()
+            if is_daily_quota_exhausted(exc) or any(k in err_lower for k in ("quota", "requests/day", "per day", "free-tier", "free_tier", "resource_exhausted")):
+                notes_msg = f"Layer 3 failure: Semantic verification could not complete because Gemini daily quota was exhausted: {safe_err}"
+            else:
+                notes_msg = f"Layer 3 failure: LLM entailment check encountered {type(exc).__name__}: {safe_err}"
+
             # Fail closed: Do NOT mark verified on provider failure, timeout, or malformed response
             return CitationCheck(
                 claim_id=claim_id,
@@ -477,8 +507,42 @@ class CitationVerifier:
                 exists=exists,
                 supports=None,
                 status=ClaimVerificationStatus.UNVERIFIED,
-                notes=f"Layer 3 failure: LLM entailment check encountered {type(exc).__name__}: {safe_err}",
+                notes=notes_msg,
             )
+
+    async def verify_citation(
+        self,
+        claim_id: str,
+        claim_text: str,
+        chunk_id: str,
+        quote: Optional[str] = None,
+        retrieved_chunks: Union[Sequence[Any], Dict[str, Any]] = (),
+        doc_ids: Optional[Sequence[str]] = None,
+    ) -> CitationCheck:
+        """
+        Verify a single citation through the three-layer verification pipeline.
+        """
+        failing_check, chunk = self.check_deterministic(
+            claim_id=claim_id,
+            claim_text=claim_text,
+            chunk_id=chunk_id,
+            quote=quote,
+            retrieved_chunks=retrieved_chunks,
+            doc_ids=doc_ids,
+        )
+        if failing_check is not None:
+            return failing_check
+
+        quote_str = (quote or "").strip()
+        chunk_text = getattr(chunk, "text", "") or ""
+        return await self._verify_semantic(
+            claim_id=claim_id,
+            claim_text=claim_text,
+            chunk_id=chunk_id,
+            quote_str=quote_str,
+            chunk_text=chunk_text,
+            exists=True,
+        )
 
     async def verify_claim(
         self,
@@ -512,16 +576,98 @@ class CitationVerifier:
         doc_ids: Optional[Sequence[str]] = None,
     ) -> List[CitationCheck]:
         """
-        Verify citations across all atomic claims.
+        Verify citations across all atomic claims using a two-phase architecture:
+        Phase 1: Check all Layer 1 and Layer 2 citations before making any Layer 3 calls.
+                 If any deterministic citation check fails, skip unnecessary Layer 3 calls,
+                 mark skipped citations UNVERIFIED, preserve accurate per-claim statuses and
+                 reasons, and fail closed.
+        Phase 2: Semantic verification (Layer 3 temperature-0 entailment) for all passed citations.
         """
-        all_checks: List[CitationCheck] = []
+        chunk_map = _to_chunk_dict(retrieved_chunks)
+
+        citation_items = []
         for claim in claims:
-            checks = await self.verify_claim(
-                claim=claim,
-                retrieved_chunks=retrieved_chunks,
+            if claim.chunk_ids:
+                for cid in claim.chunk_ids:
+                    citation_items.append((claim, cid))
+
+        if not citation_items:
+            return []
+
+        # Phase 1: Deterministic verification (Layer 1 & Layer 2)
+        deterministic_results = []
+        has_deterministic_failure = False
+
+        for claim, cid in citation_items:
+            failing_check, chunk = self.check_deterministic(
+                claim_id=claim.claim_id,
+                claim_text=claim.text,
+                chunk_id=cid,
+                quote=claim.quote,
+                retrieved_chunks=chunk_map,
                 doc_ids=doc_ids,
             )
-            all_checks.extend(checks)
+            if failing_check is not None:
+                has_deterministic_failure = True
+                deterministic_results.append((claim, cid, failing_check, None))
+            else:
+                deterministic_results.append((claim, cid, None, chunk))
+
+        # If any deterministic citation check fails, skip unnecessary Layer 3 calls
+        if has_deterministic_failure:
+            all_checks: List[CitationCheck] = []
+            for claim, cid, failing_check, chunk in deterministic_results:
+                if failing_check is not None:
+                    all_checks.append(failing_check)
+                else:
+                    # Layer 1 and Layer 2 passed, but Layer 3 skipped to fail closed without wasteful LLM latency
+                    all_checks.append(
+                        CitationCheck(
+                            claim_id=claim.claim_id,
+                            chunk_id=cid,
+                            exists=True,
+                            supports=None,
+                            status=ClaimVerificationStatus.UNVERIFIED,
+                            notes="Layer 3 skipped: Pipeline failed closed due to deterministic citation failure in other claim.",
+                        )
+                    )
+            return all_checks
+
+        # Phase 2: All citations passed Layer 1 & Layer 2. Proceed to Layer 3 entailment with fail-fast.
+        all_checks = []
+        failed_semantic_claim_id: Optional[str] = None
+
+        for claim, cid, _, chunk in deterministic_results:
+            if failed_semantic_claim_id is not None:
+                # Semantic verification failed closed in an earlier claim; skip remaining Layer 3 calls
+                all_checks.append(
+                    CitationCheck(
+                        claim_id=claim.claim_id,
+                        chunk_id=cid,
+                        exists=True,
+                        supports=None,
+                        status=ClaimVerificationStatus.UNVERIFIED,
+                        notes=f"Layer 3 skipped: Semantic verification failed closed due to verification failure in earlier claim '{failed_semantic_claim_id}'.",
+                    )
+                )
+                continue
+
+            quote_str = (claim.quote or "").strip()
+            chunk_text = getattr(chunk, "text", "") or ""
+            check = await self._verify_semantic(
+                claim_id=claim.claim_id,
+                claim_text=claim.text,
+                chunk_id=cid,
+                quote_str=quote_str,
+                chunk_text=chunk_text,
+                exists=True,
+            )
+            all_checks.append(check)
+
+            # Fail-fast: if any semantic check fails or errors, stop making further Layer 3 calls
+            if check.status != ClaimVerificationStatus.VERIFIED:
+                failed_semantic_claim_id = claim.claim_id
+
         return all_checks
 
 

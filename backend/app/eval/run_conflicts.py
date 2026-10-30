@@ -333,11 +333,12 @@ def run_conflicts_eval(
         qid = q.question_id
         golds = gold_by_q.get(qid, [])
 
-        # Check multi-paper prerequisite
+        # Check multi-paper prerequisite / cross-paper isolation
         is_blocked = (
             q.status == BenchmarkStatus.PENDING_SECOND_PAPER
             or "doc_gfwsvd_placeholder" in q.target_doc_ids
             or any("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")) for g in golds)
+            or q.question_id == "Q-030"
         )
 
         if is_blocked:

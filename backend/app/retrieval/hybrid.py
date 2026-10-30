@@ -17,19 +17,53 @@ def select_allowed_candidates(
     Select allowed candidates from raw retrieval results up to raw_depth (default: max_candidates * 2),
     filtering out references (if include_references is False) and restricted doc_ids,
     preserving original retrieval ranks, and capping at max_candidates.
+    When multiple doc_ids are specified, provides balanced candidate allocation across requested documents.
     """
     if raw_depth is None:
-        raw_depth = max_candidates * 2
-    candidates: List[Tuple[Chunk, float, int]] = []
+        raw_depth = (
+            max(max_candidates * 2, max_candidates * len(doc_ids) * 2)
+            if doc_ids and len(doc_ids) >= 2
+            else max_candidates * 2
+        )
+    allowed_pool: List[Tuple[Chunk, float, int]] = []
     for chunk, score, rank in raw_results[:raw_depth]:
         if not include_references and chunk.kind == ChunkKind.REFERENCES:
             continue
         if doc_ids is not None and chunk.doc_id not in doc_ids:
             continue
-        candidates.append((chunk, score, rank))
-        if len(candidates) >= max_candidates:
+        allowed_pool.append((chunk, score, rank))
+
+    # Single-document or unrestricted: standard sequential selection preserving original behavior
+    if not doc_ids or len(doc_ids) <= 1:
+        return allowed_pool[:max_candidates]
+
+    # Multi-document: balanced candidate allocation per requested document
+    by_doc: Dict[str, List[Tuple[Chunk, float, int]]] = {}
+    for item in allowed_pool:
+        by_doc.setdefault(item[0].doc_id, []).append(item)
+
+    per_doc_quota = max(1, max_candidates // len(doc_ids))
+    selected: List[Tuple[Chunk, float, int]] = []
+    selected_cids: Set[str] = set()
+
+    # Pass 1: select top candidates up to per_doc_quota from each requested document
+    for d in doc_ids:
+        doc_items = by_doc.get(d, [])
+        for item in doc_items[:per_doc_quota]:
+            selected.append(item)
+            selected_cids.add(item[0].chunk_id)
+
+    # Pass 2: fill remaining quota with highest-ranked remaining items across all docs
+    for item in allowed_pool:
+        if len(selected) >= max_candidates:
             break
-    return candidates
+        if item[0].chunk_id not in selected_cids:
+            selected.append(item)
+            selected_cids.add(item[0].chunk_id)
+
+    # Sort selected candidates by their original rank to preserve monotonic ordering
+    selected.sort(key=lambda x: x[2])
+    return selected
 
 
 class HybridRetriever:
@@ -91,23 +125,40 @@ class HybridRetriever:
                 return False
             return True
 
-        # Stage 1: BM25 retrieval (contribute top candidate_pool_size allowed candidates)
-        bm25_raw = self.bm25.search(query, top_k=candidate_pool_size * 2)
+        # Multi-document candidate scaling: When multiple documents are requested, ensure
+        # each requested document receives a fair allocation of candidates (up to candidate_pool_size
+        # per document) before RRF fusion, preventing specific technical evidence in one document
+        # from being crowded out by high-frequency overview terms in another.
+        effective_pool_size = (
+            candidate_pool_size * len(doc_filter_set)
+            if doc_filter_set and len(doc_filter_set) >= 2
+            else candidate_pool_size
+        )
+
+        # Stage 1: BM25 retrieval
+        raw_search_depth = (
+            max(effective_pool_size * 2, effective_pool_size * len(doc_filter_set) * 2)
+            if doc_filter_set and len(doc_filter_set) >= 2
+            else effective_pool_size * 2
+        )
+        bm25_raw = self.bm25.search(query, top_k=raw_search_depth)
         bm25_results = select_allowed_candidates(
             bm25_raw,
-            max_candidates=candidate_pool_size,
+            max_candidates=effective_pool_size,
             include_references=include_references,
             doc_ids=doc_filter_set,
+            raw_depth=raw_search_depth,
         )
         bm25_dict = {c.chunk_id: (score, rank) for c, score, rank in bm25_results}
 
-        # Stage 2: Dense retrieval (contribute top candidate_pool_size allowed candidates)
-        dense_raw = self.dense.search(query, top_k=candidate_pool_size * 2)
+        # Stage 2: Dense retrieval
+        dense_raw = self.dense.search(query, top_k=raw_search_depth)
         dense_results = select_allowed_candidates(
             dense_raw,
-            max_candidates=candidate_pool_size,
+            max_candidates=effective_pool_size,
             include_references=include_references,
             doc_ids=doc_filter_set,
+            raw_depth=raw_search_depth,
         )
         dense_dict = {c.chunk_id: (score, rank) for c, score, rank in dense_results}
 
@@ -122,7 +173,34 @@ class HybridRetriever:
         )
 
         fused_filtered = [(cid, score) for cid, score in fused if cid in self.chunks_by_id and is_allowed(self.chunks_by_id[cid])]
-        fused_pool = fused_filtered[:candidate_pool_size]
+
+        if doc_filter_set and len(doc_filter_set) >= 2:
+            by_doc_fused: Dict[str, List[Tuple[str, float]]] = {}
+            for cid, score in fused_filtered:
+                d = self.chunks_by_id[cid].doc_id
+                by_doc_fused.setdefault(d, []).append((cid, score))
+
+            per_doc_fused = max(1, effective_pool_size // len(doc_filter_set))
+            fused_pool_cids: List[str] = []
+            seen_fused_cids: Set[str] = set()
+
+            for d in doc_filter_set:
+                for cid, score in by_doc_fused.get(d, [])[:per_doc_fused]:
+                    fused_pool_cids.append(cid)
+                    seen_fused_cids.add(cid)
+
+            for cid, score in fused_filtered:
+                if len(fused_pool_cids) >= effective_pool_size:
+                    break
+                if cid not in seen_fused_cids:
+                    fused_pool_cids.append(cid)
+                    seen_fused_cids.add(cid)
+
+            fused_filtered_map = dict(fused_filtered)
+            fused_pool = [(cid, fused_filtered_map[cid]) for cid in fused_pool_cids]
+            fused_pool.sort(key=lambda x: x[1], reverse=True)
+        else:
+            fused_pool = fused_filtered[:effective_pool_size]
 
         fused_dict: Dict[str, Tuple[float, int]] = {}
         candidate_chunks: List[Chunk] = []
@@ -134,9 +212,44 @@ class HybridRetriever:
 
         # Stage 4: Cross-Encoder Reranker
         if use_reranker and candidate_chunks:
-            reranked = self.reranker.rerank(query, candidate_chunks, top_k=top_k)
+            rerank_k = len(candidate_chunks) if (doc_filter_set and len(doc_filter_set) >= 2) else top_k
+            reranked = self.reranker.rerank(query, candidate_chunks, top_k=rerank_k)
             rerank_dict = {c.chunk_id: (score, rank) for c, score, rank in reranked}
-            final_ordered_chunks = [c for c, _, _ in reranked]
+
+            if doc_filter_set and len(doc_filter_set) >= 2 and top_k >= len(doc_filter_set):
+                top_score = reranked[0][1] if reranked else 0.0
+                # A chunk is eligible for the balanced allowance only if it meets a relevance standard:
+                # it must have a positive rerank score or be within 6.0 logit units of the top score.
+                relevance_threshold = max(0.0, top_score - 6.0)
+
+                by_doc_relevant: Dict[str, List[Chunk]] = {}
+                for c, score, _ in reranked:
+                    if score >= relevance_threshold:
+                        by_doc_relevant.setdefault(c.doc_id, []).append(c)
+
+                # Small per-document evidence allowance (up to 2 chunks per qualified document)
+                doc_allowance = min(2, max(1, top_k // (len(doc_filter_set) * 2))) if top_k >= 4 else 1
+                balanced_chunks: List[Chunk] = []
+                seen_final_cids: Set[str] = set()
+
+                # Pass 1: Allocate allowance only to requested documents that have genuinely relevant evidence
+                for d in doc_filter_set:
+                    for c in by_doc_relevant.get(d, [])[:doc_allowance]:
+                        balanced_chunks.append(c)
+                        seen_final_cids.add(c.chunk_id)
+
+                # Pass 2: Fill all remaining slots strictly by globally highest reranker scores
+                for c, _, _ in reranked:
+                    if len(balanced_chunks) >= top_k:
+                        break
+                    if c.chunk_id not in seen_final_cids:
+                        balanced_chunks.append(c)
+                        seen_final_cids.add(c.chunk_id)
+
+                balanced_chunks.sort(key=lambda c: rerank_dict.get(c.chunk_id, (0.0, 0))[0], reverse=True)
+                final_ordered_chunks = balanced_chunks
+            else:
+                final_ordered_chunks = [c for c, _, _ in reranked][:top_k]
         else:
             final_ordered_chunks = candidate_chunks[:top_k]
             rerank_dict = {}

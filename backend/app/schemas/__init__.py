@@ -1,5 +1,5 @@
 from .document import Document, Chunk, ChunkKind, CHUNKER_VERSION
-from .claim import Claim, EvidenceLink, EvidenceRelation, ClaimVerificationStatus
+from .claim import Claim, ClaimComparison, ComparisonType, EvidenceLink, EvidenceRelation, ClaimVerificationStatus
 from .citation import CitationCheck
 from .answer import Answer, AnswerRequest, AnswerResponse, AnswerStatus
 from .api import HealthResponse, DocumentUploadResponse
@@ -12,6 +12,8 @@ __all__ = [
     "Chunk",
     "ChunkKind",
     "Claim",
+    "ClaimComparison",
+    "ComparisonType",
     "EvidenceLink",
     "EvidenceRelation",
     "ClaimVerificationStatus",
