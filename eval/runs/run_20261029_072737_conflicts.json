@@ -1,0 +1,185 @@
+{
+  "run_id": "run_20261029_072737_conflicts",
+  "timestamp": "2026-10-29T07:27:37.194210+00:00",
+  "git_commit": "80e93631693f4de62a06272dd739e77e0edc8c6d",
+  "evaluation_type": "apparent_conflict_grounding_and_verification",
+  "summary": {
+    "total_conflict_questions": 5,
+    "evaluated_questions": 4,
+    "blocked_pending_second_paper": 1,
+    "retrieval_success_count": 4,
+    "retrieval_success_rate": 1.0,
+    "citation_verification_success_count": 4,
+    "citation_verification_success_rate": 1.0,
+    "conflict_detection_success_count": 4,
+    "conflict_detection_success_rate": 1.0,
+    "overall_grounded_success_count": 4,
+    "overall_grounded_success_rate": 1.0
+  },
+  "per_question_results": [
+    {
+      "question_id": "Q-005",
+      "question": "Why does KFAC-SVD achieve a better memory-accuracy trade-off than BitStack despite BitStack separating binary sign masks?",
+      "question_type": "apparent_conflict",
+      "conflict_category": "real_contradiction",
+      "resolution_reason": "Methodological incompatibility: BitStack binary sign masks cannot be compressed with standard quantization kernels.",
+      "status": "EVALUATED_GROUNDED",
+      "evaluable": true,
+      "retrieval": {
+        "success": true,
+        "recall@5": 1.0,
+        "active_gold_count": 1,
+        "matched_gold_count": 1,
+        "top_retrieved_chunks": [
+          "doc_c67573ef50cc_p24_c1",
+          "doc_c67573ef50cc_p22_c6",
+          "doc_c67573ef50cc_p23_c3"
+        ]
+      },
+      "citation_verification": {
+        "success": true,
+        "answer_status": "answered",
+        "citation_checks_count": 1,
+        "all_citations_verified": true
+      },
+      "conflict_detection": {
+        "success": true,
+        "flags_source_disagreement": true,
+        "identifies_conflicting_chunks": true,
+        "expected_chunks": [
+          "doc_c67573ef50cc_p23_c3",
+          "doc_c67573ef50cc_p24_c1"
+        ]
+      },
+      "overall_success": true,
+      "final_answer": "KFAC-SVD achieves a better memory-accuracy trade-off than BitStack because separating out the binary mask makes combining it with quantization ineffective.\n\nNote: sources disagree between chunk 'doc_c67573ef50cc_p23_c3' and chunk 'doc_c67573ef50cc_p24_c1'."
+    },
+    {
+      "question_id": "Q-006",
+      "question": "Does KFAC-SVD consistently achieve lower perplexity than SVD-LLM across all compression regimes?",
+      "question_type": "apparent_conflict",
+      "conflict_category": "apparent_conflict_differing_conditions",
+      "resolution_reason": "Differing rank allocation regime: KFAC-SVD outperforms under uniform allocation, but performance tightly converges under global LEMS optimization.",
+      "status": "EVALUATED_GROUNDED",
+      "evaluable": true,
+      "retrieval": {
+        "success": true,
+        "recall@5": 1.0,
+        "active_gold_count": 2,
+        "matched_gold_count": 2,
+        "top_retrieved_chunks": [
+          "doc_c67573ef50cc_p6_c5",
+          "doc_c67573ef50cc_p7_c4",
+          "doc_c67573ef50cc_p7_c3"
+        ]
+      },
+      "citation_verification": {
+        "success": true,
+        "answer_status": "answered",
+        "citation_checks_count": 2,
+        "all_citations_verified": true
+      },
+      "conflict_detection": {
+        "success": true,
+        "flags_source_disagreement": true,
+        "identifies_conflicting_chunks": true,
+        "expected_chunks": [
+          "doc_c67573ef50cc_p7_c4",
+          "doc_c67573ef50cc_p6_c5"
+        ]
+      },
+      "overall_success": true,
+      "final_answer": "KFAC-SVD achieves approximately 15% lower perplexity than SVD-LLM under uniform allocation, but when combined with LEMS, perplexities become tightly matched between the two methods.\n\nNote: sources disagree between chunk 'doc_c67573ef50cc_p7_c4' and chunk 'doc_c67573ef50cc_p6_c5'."
+    },
+    {
+      "question_id": "Q-015",
+      "question": "Which GPU were the experiments run on? (H200 for the main experiments, A100 for the speed measurements)",
+      "question_type": "apparent_conflict",
+      "conflict_category": "apparent_conflict_differing_conditions",
+      "resolution_reason": "Differing experimental hardware: NVIDIA H200 GPU used for main experiments (p.6), whereas NVIDIA A100 GPU was used for wall-clock inference speedup benchmarking (p.26).",
+      "status": "EVALUATED_GROUNDED",
+      "evaluable": true,
+      "retrieval": {
+        "success": true,
+        "recall@5": 1.0,
+        "active_gold_count": 2,
+        "matched_gold_count": 2,
+        "top_retrieved_chunks": [
+          "doc_c67573ef50cc_p26_c7",
+          "doc_c67573ef50cc_p6_c2",
+          "doc_c67573ef50cc_p25_c4"
+        ]
+      },
+      "citation_verification": {
+        "success": true,
+        "answer_status": "answered",
+        "citation_checks_count": 2,
+        "all_citations_verified": true
+      },
+      "conflict_detection": {
+        "success": true,
+        "flags_source_disagreement": true,
+        "identifies_conflicting_chunks": true,
+        "expected_chunks": [
+          "doc_c67573ef50cc_p6_c2",
+          "doc_c67573ef50cc_p26_c7"
+        ]
+      },
+      "overall_success": true,
+      "final_answer": "The main experiments were run on a single NVIDIA H200 GPU, whereas wall-clock inference speed measurements were conducted on a single NVIDIA A100 GPU.\n\nNote: sources disagree between chunk 'doc_c67573ef50cc_p6_c2' and chunk 'doc_c67573ef50cc_p26_c7'."
+    },
+    {
+      "question_id": "Q-017",
+      "question": "Does KL divergence beat MSE as the calibration metric? (better on accuracy, slightly worse on perplexity)",
+      "question_type": "apparent_conflict",
+      "conflict_category": "apparent_conflict_differing_conditions",
+      "resolution_reason": "Differing evaluation metrics: KL divergence outperforms MSE on zero-shot accuracy (+1.1 p.p.), while MSE performs slightly better on perplexity (p.8).",
+      "status": "EVALUATED_GROUNDED",
+      "evaluable": true,
+      "retrieval": {
+        "success": true,
+        "recall@5": 1.0,
+        "active_gold_count": 2,
+        "matched_gold_count": 2,
+        "top_retrieved_chunks": [
+          "doc_c67573ef50cc_p8_c6",
+          "doc_c67573ef50cc_p18_c1",
+          "doc_c67573ef50cc_p8_c2"
+        ]
+      },
+      "citation_verification": {
+        "success": true,
+        "answer_status": "answered",
+        "citation_checks_count": 2,
+        "all_citations_verified": true
+      },
+      "conflict_detection": {
+        "success": true,
+        "flags_source_disagreement": true,
+        "identifies_conflicting_chunks": true,
+        "expected_chunks": [
+          "doc_c67573ef50cc_p8_c6",
+          "doc_c67573ef50cc_p18_c1"
+        ]
+      },
+      "overall_success": true,
+      "final_answer": "KL divergence consistently outperforms MSE in zero shot accuracy, while for perplexity, MSE performs slightly better than KL, but with small margins.\n\nNote: sources disagree between chunk 'doc_c67573ef50cc_p8_c6' and chunk 'doc_c67573ef50cc_p18_c1'."
+    },
+    {
+      "question_id": "Q-030",
+      "question": "Does GFWSVD's own reported performance match the LEMS paper's claim that it degrades?",
+      "question_type": "apparent_conflict",
+      "status": "BLOCKED_PENDING_SECOND_PAPER",
+      "evaluable": false,
+      "block_reason": "Cross-paper question requires second paper (GFWSVD / TODO_GFWSVD_SHA256) which is not yet ingested into corpus.",
+      "target_doc_ids": [
+        "doc_c67573ef50cc",
+        "doc_7fdb1200e823"
+      ],
+      "retrieval_success": null,
+      "citation_verification_success": null,
+      "conflict_detection_success": null,
+      "overall_success": null
+    }
+  ]
+}

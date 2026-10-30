@@ -911,7 +911,7 @@ def test_interaction_steps_only_extracts_model_output():
         steps=[user_step, thought_step, model_step],
     )
     mock_client = make_mock_client(return_value=mock_interaction)
-    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+    provider = GeminiProvider(api_key="test-api-key", model="gemini-3.6-flash", client=mock_client)
 
     response = run_sync(provider.generate([LLMMessage(role="user", content="Question")]))
     assert response.content == '{"answer": "Verified output", "claims": []}'
@@ -936,7 +936,7 @@ def test_interaction_steps_without_model_output_raises_empty_response():
         steps=[user_step, thought_step],
     )
     mock_client = make_mock_client(return_value=mock_interaction)
-    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+    provider = GeminiProvider(api_key="test-api-key", model="gemini-3.6-flash", client=mock_client)
 
     with pytest.raises(RuntimeError) as exc_info:
         run_sync(provider.generate([LLMMessage(role="user", content="Question")]))
@@ -1072,7 +1072,7 @@ def test_gemini_provider_passes_thinking_level_and_2048_budget_to_sdk():
         steps=[],
     )
     mock_client = make_mock_client(return_value=mock_interaction)
-    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+    provider = GeminiProvider(api_key="test-api-key", model="gemini-3.6-flash", client=mock_client)
 
     run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
 
@@ -1096,7 +1096,7 @@ def test_gemini_provider_custom_thinking_level_and_max_tokens():
         steps=[],
     )
     mock_client = make_mock_client(return_value=mock_interaction)
-    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+    provider = GeminiProvider(api_key="test-api-key", model="gemini-3.6-flash", client=mock_client)
 
     run_sync(provider.generate(
         [LLMMessage(role="user", content="Hi")],
@@ -1122,7 +1122,7 @@ def test_gemini_provider_passes_response_format_to_sdk():
         steps=[],
     )
     mock_client = make_mock_client(return_value=mock_interaction)
-    provider = GeminiProvider(api_key="test-api-key", client=mock_client)
+    provider = GeminiProvider(api_key="test-api-key", model="gemini-3.6-flash", client=mock_client)
 
     test_rf = {"type": "text", "mime_type": "application/json", "schema": {"type": "object"}}
     run_sync(provider.generate(
@@ -1178,3 +1178,312 @@ def test_gemini_provider_outer_grace_allows_sdk_transport_timeout_first():
     )
     with pytest.raises(httpx.ReadTimeout):
         run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+
+
+def test_is_retryable_error_api_timeout_error():
+    """
+    APITimeoutError classification regression test:
+    Verify that APITimeoutError from google.genai._gaos.lib.compat_errors
+    or any exception named APITimeoutError is classified as retryable.
+    """
+    mock_client = make_mock_client()
+    provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
+
+    try:
+        from google.genai._gaos.lib.compat_errors import APITimeoutError
+        timeout_exc = APITimeoutError("Request timed out")
+    except ImportError:
+        APITimeoutError = type("APITimeoutError", (Exception,), {})
+        timeout_exc = APITimeoutError("Request timed out")
+
+    is_retryable, reason = provider._is_retryable_error(timeout_exc)
+    assert is_retryable is True
+    assert "APITimeoutError" in reason or "timed out" in reason.lower()
+
+
+def test_api_timeout_error_exhausts_retries_and_verifier_fails_closed():
+    """
+    Verify that when generate() encounters persistent APITimeoutError,
+    retries are attempted up to max_retries, and CitationVerifier fails closed
+    with ClaimVerificationStatus.UNVERIFIED.
+    """
+    try:
+        from google.genai._gaos.lib.compat_errors import APITimeoutError
+    except ImportError:
+        APITimeoutError = type("APITimeoutError", (Exception,), {})
+
+    timeout_exc = APITimeoutError("Request timed out after 45.0s")
+    mock_client = make_mock_client(side_effect=timeout_exc)
+
+    provider = GeminiProvider(
+        api_key="test-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        timeout=45.0,
+        max_retries=2,
+        initial_delay=0.01,
+        backoff_factor=1.0,
+    )
+
+    from backend.app.citations.verifier import CitationVerifier
+    from backend.app.schemas import ClaimVerificationStatus
+
+    chunk = SimpleNamespace(
+        chunk_id="chk_timeout",
+        doc_id="doc_test",
+        page=1,
+        text="LEMS uses integer linear programming for rank search.",
+    )
+
+    verifier = CitationVerifier(llm_provider=provider)
+    check = run_sync(verifier.verify_citation(
+        claim_id="c_timeout",
+        claim_text="LEMS uses integer linear programming.",
+        chunk_id="chk_timeout",
+        quote="integer linear programming",
+        retrieved_chunks=[chunk],
+    ))
+
+    # SDK interactions.create must have been called 1 + max_retries = 3 times
+    assert mock_client.aio.interactions.create.call_count == 3
+    # Verifier must fail closed as UNVERIFIED
+    assert check.status == ClaimVerificationStatus.UNVERIFIED
+    assert check.supports is None
+    assert "APITimeoutError" in check.notes or "timed out" in check.notes.lower()
+
+
+def test_is_retryable_error_daily_quota_exhaustion_is_non_retryable():
+    """
+    Daily quota exhaustion (e.g. 20 requests/day exceeded on free tier)
+    must be classified as non-retryable so that futile retries are aborted immediately.
+    """
+    from google.genai.errors import ClientError
+
+    quota_err = ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota). Free tier limit of 20 requests/day exceeded.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    )
+
+    mock_client = make_mock_client(side_effect=quota_err)
+    provider = GeminiProvider(
+        api_key="test-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        max_retries=3,
+        initial_delay=0.01,
+    )
+
+    is_retryable, reason = provider._is_retryable_error(quota_err)
+    assert is_retryable is False
+    assert "Daily quota exhausted" in reason
+
+    # Calling generate() should fail on attempt 1 without retrying 3 times
+    with pytest.raises(ClientError):
+        run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
+
+    assert mock_client.aio.interactions.create.call_count == 1
+
+
+def test_is_retryable_error_transient_429_remains_retryable():
+    """
+    Transient HTTP 429 errors (e.g. per-minute rate limit bursts)
+    must remain retryable under the bounded retry policy.
+    """
+    from google.genai.errors import ClientError
+
+    transient_err = ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "Rate limit exceeded. Too many requests per minute. Please retry after 2s.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    )
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
+
+    is_retryable, reason = provider._is_retryable_error(transient_err)
+    assert is_retryable is True
+    assert "Rate limit (HTTP 429)" in reason
+
+
+def test_citation_verifier_surfaces_clear_quota_diagnostic():
+    """
+    When semantic entailment verification fails due to daily quota exhaustion,
+    CitationVerifier must surface a clear, sanitized diagnostic note indicating
+    that semantic verification could not complete because of quota exhaustion,
+    and fail closed as UNVERIFIED.
+    """
+    from google.genai.errors import ClientError
+    from backend.app.citations.verifier import CitationVerifier
+    from backend.app.schemas import ClaimVerificationStatus
+
+    quota_err = ClientError(
+        429,
+        {
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota). Free tier limit of 20 requests/day exceeded.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    )
+
+    mock_client = make_mock_client(side_effect=quota_err)
+    provider = GeminiProvider(
+        api_key="test-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        max_retries=0,
+    )
+
+    verifier = CitationVerifier(llm_provider=provider)
+    chunk = SimpleNamespace(
+        chunk_id="chk_q",
+        doc_id="doc_q",
+        page=1,
+        text="LEMS introduces an ILP formulation.",
+    )
+
+    check = run_sync(verifier.verify_citation(
+        claim_id="c_quota",
+        claim_text="LEMS uses ILP.",
+        chunk_id="chk_q",
+        quote="LEMS introduces an ILP formulation",
+        retrieved_chunks=[chunk],
+    ))
+
+    assert check.status == ClaimVerificationStatus.UNVERIFIED
+    assert check.supports is None
+    assert "Gemini daily quota was exhausted" in check.notes
+
+
+def test_rate_limit_error_with_quota_in_body_is_non_retryable():
+    """
+    When Google GenAI SDK raises RateLimitError with quota details located in exc.body,
+    it must be recognized as daily quota exhaustion and classified as non-retryable.
+    """
+    from google.genai._gaos.lib import compat_errors as gaos_compat_errors
+    import httpx
+
+    resp = httpx.Response(status_code=429, request=httpx.Request("POST", "https://example.com"))
+    err = gaos_compat_errors.RateLimitError(
+        message="Resource has been exhausted",
+        response=resp,
+        body={
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota). Please wait 21h0m0s before retrying.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    )
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
+
+    is_retryable, reason = provider._is_retryable_error(err)
+    assert is_retryable is False
+    assert reason == "Daily quota exhausted (HTTP 429)"
+
+
+def test_daily_quota_exhaustion_fails_fast_on_attempt_1_without_retries():
+    """
+    Daily quota exhaustion (e.g. wait 21 hours) must fail immediately on attempt 1
+    without executing futile retries or backoff delays.
+    """
+    from google.genai._gaos.lib import compat_errors as gaos_compat_errors
+    import httpx
+
+    resp = httpx.Response(status_code=429, request=httpx.Request("POST", "https://example.com"))
+    quota_err = gaos_compat_errors.RateLimitError(
+        message="Resource has been exhausted (e.g. check quota). Please wait 21 hours before retrying.",
+        response=resp,
+        body={
+            "error": {
+                "code": 429,
+                "message": "Resource has been exhausted (e.g. check quota). Please wait 21 hours before retrying.",
+            }
+        },
+    )
+
+    mock_client = make_mock_client(side_effect=quota_err)
+    provider = GeminiProvider(
+        api_key="test-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        max_retries=3,
+        initial_delay=0.01,
+    )
+
+    with pytest.raises(gaos_compat_errors.RateLimitError):
+        run_sync(provider.generate([
+            LLMMessage(role="user", content="Research question")
+        ]))
+
+    # Strict fail-fast: must have failed on attempt 1, never retried
+    assert mock_client.aio.interactions.create.await_count == 1
+
+
+def test_transient_per_minute_rate_limit_remains_retryable():
+    """
+    Genuine transient rate limits (such as per-minute limits) must retain bounded retries.
+    """
+    from google.genai._gaos.lib import compat_errors as gaos_compat_errors
+    import httpx
+
+    resp = httpx.Response(status_code=429, request=httpx.Request("POST", "https://example.com"))
+    transient_err = gaos_compat_errors.RateLimitError(
+        message="Rate limit exceeded: 15 requests per minute. Please retry after 20s.",
+        response=resp,
+        body={"error": {"message": "Rate limit exceeded: 15 requests per minute. Please retry after 20s."}},
+    )
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
+
+    is_retryable, reason = provider._is_retryable_error(transient_err)
+    assert is_retryable is True
+    assert reason == "Rate limit (HTTP 429)"
+
+
+def test_generic_resource_exhausted_without_daily_indicators_remains_retryable():
+    """
+    Generic 'Resource has been exhausted' or HTTP 429 without explicit daily indicators
+    or long reset windows must not be falsely treated as daily quota exhaustion.
+    """
+    from google.genai._gaos.lib import compat_errors as gaos_compat_errors
+    import httpx
+
+    resp = httpx.Response(status_code=429, request=httpx.Request("POST", "https://example.com"))
+    generic_err = gaos_compat_errors.RateLimitError(
+        message="Resource has been exhausted (e.g. check quota).",
+        response=resp,
+        body={"error": {"message": "Resource has been exhausted (e.g. check quota)."}},
+    )
+
+    mock_client = make_mock_client()
+    provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
+
+    is_retryable, reason = provider._is_retryable_error(generic_err)
+    assert is_retryable is True
+    assert reason == "Rate limit (HTTP 429)"
+
+
+def test_unrelated_error_with_hours_never_misclassified_as_daily_quota():
+    """
+    Arbitrary errors mentioning 'hours' without quota context must never trigger daily quota classification.
+    """
+    from backend.app.llm.gemini import is_daily_quota_exhausted
+
+    err = RuntimeError("The batch job has been running for 3 hours.")
+    assert is_daily_quota_exhausted(err) is False

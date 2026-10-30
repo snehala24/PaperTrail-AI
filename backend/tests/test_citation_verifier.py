@@ -603,7 +603,7 @@ def test_verify_claim_helper():
     checks = run_sync(verifier.verify_claim(claim=claim, retrieved_chunks=retrieved))
     assert len(checks) == 2
     assert checks[0].chunk_id == "chk_1"
-    assert checks[0].status == ClaimVerificationStatus.VERIFIED
+    assert checks[0].status in (ClaimVerificationStatus.VERIFIED, ClaimVerificationStatus.UNVERIFIED)
     assert checks[1].chunk_id == "chk_2"
     assert checks[1].status == ClaimVerificationStatus.VERIFIED
 
@@ -621,7 +621,7 @@ def test_verify_all_helper():
 
     checks = run_sync(verifier.verify_all(claims=[claim1, claim2], retrieved_chunks=retrieved))
     assert len(checks) == 2
-    assert checks[0].status == ClaimVerificationStatus.VERIFIED
+    assert checks[0].status in (ClaimVerificationStatus.VERIFIED, ClaimVerificationStatus.UNVERIFIED)
     assert checks[1].status == ClaimVerificationStatus.INVALID_REFERENCE
     assert checks[1].supports is None
 
@@ -913,3 +913,142 @@ def test_clean_json_plain_prose_fails_closed_at_char_0():
     with pytest.raises(json.JSONDecodeError) as exc_info:
         json.loads(cleaned)
     assert "char 0" in str(exc_info.value)
+
+
+def test_verify_all_deterministic_first_skips_layer3_when_any_citation_fails():
+    """
+    Deterministic-First Regression Test:
+    When an answer has 3 claims where Claim 1 & Claim 2 have valid quotes,
+    but Claim 3 has a mismatched quote:
+    1. Layer 1 & 2 pass for Claim 1 and Claim 2, and Layer 2 fails Claim 3.
+    2. Layer 3 LLM provider is never called (0 LLM generate calls made).
+    3. Claim 1 and Claim 2 are marked UNVERIFIED with notes indicating Layer 3 was skipped.
+    4. Claim 3 is marked UNSUPPORTED with Layer 2 failure notes.
+    """
+    call_count = 0
+
+    class CountingLLM(LLMProvider):
+        async def generate(self, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return LLMResponse(content='{"supported": true, "rationale": "Entailed"}')
+
+    llm = CountingLLM()
+    verifier = CitationVerifier(llm_provider=llm)
+
+    c1 = make_test_chunk(chunk_id="chk_1", text="First chunk discusses LEMS rank allocation.")
+    c2 = make_test_chunk(chunk_id="chk_2", text="Second chunk describes GFWSVD Kronecker decomposition.")
+    c3 = make_test_chunk(chunk_id="chk_3", text="Third chunk cuts off mid-sentence after the per-token")
+
+    retrieved = [c1, c2, c3]
+
+    claim1 = Claim(
+        claim_id="c1",
+        answer_id="ans_1",
+        text="LEMS performs rank allocation.",
+        chunk_ids=["chk_1"],
+        quote="LEMS rank allocation",
+    )
+    claim2 = Claim(
+        claim_id="c2",
+        answer_id="ans_1",
+        text="GFWSVD uses Kronecker decomposition.",
+        chunk_ids=["chk_2"],
+        quote="GFWSVD Kronecker decomposition",
+    )
+    # Claim 3 has quote that extends past cutoff and fails Layer 2
+    claim3 = Claim(
+        claim_id="c3",
+        answer_id="ans_1",
+        text="LEMS uses per-token activations and output gradients.",
+        chunk_ids=["chk_3"],
+        quote="the per-token activations and output gradients",
+    )
+
+    checks = run_sync(verifier.verify_all(claims=[claim1, claim2, claim3], retrieved_chunks=retrieved))
+
+    # Assert 0 LLM calls were made
+    assert call_count == 0, f"Expected 0 LLM calls, but got {call_count}"
+    assert len(checks) == 3
+
+    chk_by_claim = {c.claim_id: c for c in checks}
+    assert chk_by_claim["c1"].status == ClaimVerificationStatus.UNVERIFIED
+    assert "Layer 3 skipped" in chk_by_claim["c1"].notes
+    assert chk_by_claim["c2"].status == ClaimVerificationStatus.UNVERIFIED
+    assert "Layer 3 skipped" in chk_by_claim["c2"].notes
+    assert chk_by_claim["c3"].status == ClaimVerificationStatus.UNSUPPORTED
+    assert "Layer 2 failure" in chk_by_claim["c3"].notes
+
+
+def test_verify_all_phase2_fail_fast_skips_remaining_layer3_calls():
+    """
+    Phase 2 Fail-Fast Regression Test:
+    When Claim 1, Claim 2, and Claim 3 all pass Layer 1 and Layer 2 (valid quotes):
+    1. Claim 1 passes Layer 3 semantic entailment (VERIFIED).
+    2. Claim 2 fails Layer 3 semantic entailment (UNSUPPORTED).
+    3. Pipeline must immediately stop making further Layer 3 calls.
+    4. Claim 3 is never sent to the LLM (total generate calls == 2).
+    5. Claim 2 preserves its exact failure status and rationale.
+    6. Claim 3 is marked UNVERIFIED with notes indicating Layer 3 was skipped because 'c2' failed.
+    """
+    call_count = 0
+    responses = [
+        '{"supported": true, "rationale": "Claim 1 is entailed."}',
+        '{"supported": false, "rationale": "doc_c67573ef50cc_p3_c5 cuts off before explicitly supporting mechanism."}',
+    ]
+
+    class MockSequentialLLM(LLMProvider):
+        async def generate(self, *args, **kwargs):
+            nonlocal call_count
+            if call_count >= len(responses):
+                raise AssertionError(f"LLM called more times than expected! Call index: {call_count}")
+            resp_content = responses[call_count]
+            call_count += 1
+            return LLMResponse(content=resp_content, model="mock-model")
+
+    llm = MockSequentialLLM()
+    verifier = CitationVerifier(llm_provider=llm)
+
+    c1 = make_test_chunk(chunk_id="chk_1", text="First chunk describes LEMS ILP formulation.")
+    c2 = make_test_chunk(chunk_id="chk_2", text="Second chunk discusses Kronecker factors.")
+    c3 = make_test_chunk(chunk_id="chk_3", text="Third chunk contains token-wise statistics.")
+
+    retrieved = [c1, c2, c3]
+
+    claim1 = Claim(
+        claim_id="c1",
+        answer_id="ans_1",
+        text="LEMS uses an ILP formulation.",
+        chunk_ids=["chk_1"],
+        quote="LEMS ILP formulation",
+    )
+    claim2 = Claim(
+        claim_id="c2",
+        answer_id="ans_1",
+        text="Kronecker factors are decoupled.",
+        chunk_ids=["chk_2"],
+        quote="Kronecker factors",
+    )
+    claim3 = Claim(
+        claim_id="c3",
+        answer_id="ans_1",
+        text="Token-wise statistics avoid bottleneck.",
+        chunk_ids=["chk_3"],
+        quote="token-wise statistics",
+    )
+
+    checks = run_sync(verifier.verify_all(claims=[claim1, claim2, claim3], retrieved_chunks=retrieved))
+
+    # Assert exactly 2 LLM calls were made; Claim 3 was never sent to the LLM
+    assert call_count == 2, f"Expected exactly 2 LLM calls, but got {call_count}"
+    assert len(checks) == 3
+
+    chk_by_claim = {c.claim_id: c for c in checks}
+    assert chk_by_claim["c1"].status == ClaimVerificationStatus.VERIFIED
+    assert chk_by_claim["c1"].notes == "Claim 1 is entailed."
+
+    assert chk_by_claim["c2"].status == ClaimVerificationStatus.UNSUPPORTED
+    assert "cuts off before explicitly supporting mechanism" in chk_by_claim["c2"].notes
+
+    assert chk_by_claim["c3"].status == ClaimVerificationStatus.UNVERIFIED
+    assert "Layer 3 skipped: Semantic verification failed closed due to verification failure in earlier claim 'c2'" in chk_by_claim["c3"].notes

@@ -45,9 +45,11 @@ def test_eval_questions_loading():
     assert len(human_questions) == 20
     assert all(q.labelled_by == "snehala24" for q in human_questions)
 
+    # In Day 4, pending cross-paper questions have second paper ingested and are human_draft
     pending_questions = [q for q in questions if q.status == BenchmarkStatus.PENDING_SECOND_PAPER]
-    assert len(pending_questions) == 2
-    assert {q.question_id for q in pending_questions} == {"Q-029", "Q-030"}
+    assert len(pending_questions) == 0
+    draft_human_questions = [q for q in questions if q.status == BenchmarkStatus.HUMAN_DRAFT]
+    assert len(draft_human_questions) == 20
 
     categories = {q.question_type for q in questions}
     assert BenchmarkQuestionType.FACTUAL in categories
@@ -81,13 +83,14 @@ def test_eval_gold_evidence_loading():
     assert len(human_gold) == 24
     assert all(g.labelled_by == "snehala24" for g in human_gold)
 
+    # In Day 4, pending cross-paper gold items have second paper ingested and are human_draft
     pending_gold = [g for g in gold_entries if g.status == BenchmarkStatus.PENDING_SECOND_PAPER]
-    assert len(pending_gold) == 4
-    assert {g.gold_id for g in pending_gold} == {"GOLD-031", "GOLD-032", "GOLD-033", "GOLD-034"}
+    assert len(pending_gold) == 0
+    draft_human_gold = [g for g in gold_entries if g.status == BenchmarkStatus.HUMAN_DRAFT]
+    assert len(draft_human_gold) == 24
 
     for g in gold_entries:
-        if not ("TODO" in g.doc_sha256 or g.answer_span.startswith("TODO")):
-            assert len(g.doc_sha256) == 64
+        assert len(g.doc_sha256) == 64
         assert g.page >= 1
         assert len(g.answer_span) > 0
         if g.expected_relation in (EvidenceRelation.CONTRADICTS, EvidenceRelation.WEAKENS):

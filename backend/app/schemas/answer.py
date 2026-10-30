@@ -2,7 +2,7 @@ import re
 from enum import Enum
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
-from .claim import Claim, EvidenceLink
+from .claim import Claim, ClaimComparison, EvidenceLink
 from .citation import CitationCheck
 
 DOC_ID_REGEX = re.compile(r"^doc_[0-9a-f]{12}$")
@@ -63,6 +63,10 @@ class AnswerResponse(BaseModel):
     citation_checks: List[CitationCheck] = Field(
         default_factory=list,
         description="Audit checks verifying existence, quotation, and semantic support for citations"
+    )
+    comparisons: List[ClaimComparison] = Field(
+        default_factory=list,
+        description="Cross-paper comparisons between claims or sources"
     )
     status: AnswerStatus = Field(..., description="High-level response status: answered, abstained, or error")
     abstain_reason: Optional[str] = Field(
