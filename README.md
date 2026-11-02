@@ -4,6 +4,8 @@
 
 PaperTrail AI is not a "chat with a PDF" wrapper. The unit it reasons over is the **claim**, not the document, and the unit it shows you is the **evidence link**, not a citation marker.
 
+**Who it is for:** anyone who has to synthesize several papers and be accountable for the result — a researcher writing a related-work section, a graduate student checking that a review's claim is actually in the source, an engineer deciding between two methods from their published numbers. It is built as a single-user local workspace: the corpus, chunks and evaluation artifacts stay on disk where you can read them, and the product's promise is narrower than "answers about papers" — it is *auditable or explicitly refused*.
+
 ---
 
 ## The problem it addresses
@@ -118,7 +120,7 @@ The frontend reads the backend URL from `NEXT_PUBLIC_API_URL` (see `frontend/.en
 | `HOST`, `PORT`, `ENVIRONMENT`, `LOG_LEVEL` | Server and logging. |
 | `NEXT_PUBLIC_API_URL` | Frontend → backend base URL. |
 
-No key, token, or credential value belongs in this repository. If a live key is ever pasted into a terminal or log, treat it as exposed and rotate it.
+No key, token, or credential value belongs in this repository. If a live key is ever pasted into a terminal or log, treat it as exposed and rotate it. The repository-side audit (what was scanned, what it found, and what it cannot establish) plus the manual revocation checklist the owner still has to perform is [docs/security-key-review.md](docs/security-key-review.md).
 
 ### 4. Ingesting papers
 
@@ -141,7 +143,7 @@ Re-uploading an existing PDF is a no-op: upload-deduplication by SHA-256, and ve
 | `GET /documents/{doc_id}` | One document. |
 | `GET /documents/{doc_id}/chunks` | Every stored passage for that document. |
 | `POST /documents` | Upload and index a PDF (≤ 25 MB), `201` with the document record. |
-| `POST /search` | Hybrid retrieval with per-stage scores (`bm25`, `dense`, `fused`, `rerank`). |
+| `POST /search` | Hybrid retrieval with per-stage scores and ranks on each result (`bm25_score`/`bm25_rank`, `dense_score`/`dense_rank`, `fused_score`/`fused_rank`, `rerank_score`/`rerank_rank`), plus `total_candidates` and `returned_count`. |
 | `POST /answer` | Grounded answer: claims, evidence links, verification results, comparisons, or an abstention with diagnostics. |
 
 ---
@@ -172,7 +174,9 @@ Chunk composition: 278 text passages, 13 tables, 27 figure references, 91 refere
 | `eval/questions.jsonl` | 30 | 20 | 10 | 0 |
 | `eval/gold_evidence.jsonl` | 34 | 24 | 10 | 0 |
 
-**No gold annotation has been checked against a PDF and signed off yet.** Every accuracy figure below is therefore a *pipeline-validation* measurement against draft labels — it shows the retrieval and verification stack behaves sensibly, not that it matches expert ground truth. `eval/LABELLING.md` is the protocol; `backend/app/eval/review_worksheet.py` generates `eval/review_worksheet.md`, one checklist per gold span, pre-resolved against the stored corpus.
+**No gold annotation has been checked against a PDF and signed off yet.** Every accuracy figure below is therefore a *pipeline-validation* measurement against draft labels — it shows the retrieval and verification stack behaves sensibly, not that it matches expert ground truth. `eval/LABELLING.md` is the protocol, [eval/HUMAN-REVIEW-GUIDE.md](eval/HUMAN-REVIEW-GUIDE.md) is the reviewer's instruction set, and `backend/app/eval/review_worksheet.py` generates `eval/review_worksheet.md`, one checklist per gold span, pre-resolved against the stored corpus.
+
+The worksheet reports how each recorded span relates to the indexed text — 33 `exact`, 1 `case only`, 0 absent, 0 wrong-page, 0 missing-document — and flags 15 of the 34 items with a caution before anyone ticks a box. That is **structural integrity, not human validation**: every span matches text that a machine extracted, and no person has yet confirmed a single one against the PDF. Two of the flags are substantive: both `contradicts` annotations carry a `conflict_reason` that describes an *apparent* conflict, so label and reason point at different ledger relations and only a human can decide which is right.
 
 ### Retrieval results — current corpus (5 papers, 409 chunks)
 
@@ -187,12 +191,23 @@ Run [`eval/runs/run_20261102_132940.json`](eval/runs/run_20261102_132940.json) (
 
 Hybrid + rerank carries Recall@5 = 0.8800 with a 95% bootstrap interval of [0.74, 0.98] and MRR [0.538, 0.827]. Split by who drafted the labels:
 
-| Subset | Answerable n | Best configuration | Recall@5 | MRR |
+| Subset | Answerable n | Shipped config (hybrid + rerank) | Recall@5 | MRR |
 | --- | :---: | --- | --- | --- |
 | Researcher-drafted (`human_draft`) | 17 | Hybrid + rerank | 0.8824 [0.7353, 1.0] | 0.7196 |
 | Assistant-drafted (`ai_draft`) | 8 | Hybrid + rerank | 0.8750 | 0.6354 |
 
-At n = 25 and n = 17 the intervals remain wide and the subsets are not statistically separable. Only one question misses Recall@5 under reranking (Q-021); lexical and dense-only configurations miss six and five respectively, which is what the reranker is buying. Full per-configuration failure lists, the corpus fingerprint and the reproduce commands are in [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md).
+At n = 25 and n = 17 the intervals remain wide and the subsets are not statistically separable. In the
+assistant-drafted subset the reranker does **not** win: BM25 reaches the same Recall@5 (0.8750) with MRR
+0.8160 versus rerank's 0.6354, and rerank's Recall@1 there is the weakest of the four configurations
+(0.5000). That is eight questions, and those eight were written from the same passages their labels point
+at, so it is a property of how the subset was drafted, not evidence that reranking hurts — see
+[docs/benchmark-retrieval.md](docs/benchmark-retrieval.md) before reading anything into it.
+
+Only one question misses Recall@5 under reranking (Q-021). BM25 misses six (Q-011, Q-012, Q-013, Q-014,
+Q-019, Q-029), dense-only misses six (Q-012, Q-013, Q-018, Q-021, Q-024, Q-025) and hybrid + RRF misses
+five (Q-012, Q-013, Q-018, Q-021, Q-025), which is what the reranker is buying. Full per-configuration
+failure lists, the corpus fingerprint and the reproduce commands are in
+[docs/benchmark-retrieval.md](docs/benchmark-retrieval.md).
 
 ### Retrieval results — historical (2-paper, 209-chunk corpus)
 
@@ -253,16 +268,18 @@ That runner is fully offline and deterministic — each question is answered thr
 
 | Check | Result |
 | --- | --- |
-| Backend suite (`pytest backend/tests`) | **366 passed**, 0 failed, 0 skipped, 1 pre-existing `DeprecationWarning`, 78 s |
+| Backend suite (`pytest backend/tests`) | **401 passed**, 0 failed, 0 skipped, 0 warnings, 71 s |
 | Frontend suite (`npm run test` — Vitest) | **155 passed** across 9 files |
 | Type check (`npm run typecheck`) | clean, exit 0 |
 | Production build (`npm run build`) | succeeds; route `/` 32.5 kB, First Load JS 120 kB |
+| Retrieval benchmark re-run (offline, commit `2f7cdad`) | `eval/runs/run_20261102_154437.json` — metric blocks and per-configuration failure lists identical to the documented `run_20261102_132940.json` |
+| Conflict benchmark re-run (offline, scripted, commit `2f7cdad`) | `eval/runs/run_20261102_154550_conflicts.json` — summary and per-question records identical to `run_20261102_150550_conflicts.json`; Q-030 still `blocked`, not scored |
 | Gold-span integrity (`python -m backend.app.eval.verify_gold`) | 34/34 gold spans resolve inside their cited page's stored chunks; 25 answerable questions matched, 5 reserved unanswerable, 0 orphan questions, 0 unmatched gold |
 | Label integrity (`python -m backend.app.eval.review_worksheet --check`) | 34 gold annotations, 0 human-verified, 0 integrity errors |
 | Browser walkthrough of all five destinations | performed against a running backend, including chunk search, document selection, loading, empty and no-match states, abstention, backend-error and upload validation; no console errors |
 | Live end-to-end questions | performed for single-paper factual, multi-paper comparative, cross-paper conflict, and unanswerable prompts; see caveats below |
 
-Backend coverage grew from 359 to 366 tests during the 2026-11-02 hardening pass: two cross-paper conflict-ledger cases, four parser cases (figure-only warnings and title extraction) and two storage-resilience cases.
+Backend coverage stood at 366 tests after the 2026-11-02 hardening pass (two cross-paper conflict-ledger cases, four parser cases covering figure-only warnings and title extraction, two storage-resilience cases). It is 401 now; +17 of that growth is the rewritten review-worksheet module (19 → 36 cases, covering span classification verdicts, caution generation, label integrity and the CLI), and the review-worksheet file is the only test module that changed.
 
 The tests are offline — no test makes a live provider call, and negative tests assert that fake credentials never reach logs or responses. The six controlled live checks (single-paper, cross-paper, claimed contradiction, apparent conflict, abstention, and an independent quotation re-check) are recorded in [docs/validation-report.md](docs/validation-report.md).
 
@@ -277,7 +294,8 @@ The tests are offline — no test makes a live provider call, and negative tests
 - **Live answers depend on a paid-tier provider for sustained use.** On a free tier, request caps will surface as explicit provider failures; the system abstains instead of answering unverified.
 - **Research history is browser-local.** Saved runs live in `localStorage` on that machine and profile; there is no server-side history, sync, or export yet.
 - **Single-user JSON storage.** No authentication, no concurrency control, no queue; indexing runs synchronously inside the upload request.
-- **Stored titles predate the parser fix.** The five indexed records were created before page-1 title extraction was corrected, so the frontend still carries a small display override table (`frontend/src/lib/display.ts`) for them. Re-ingesting would refresh the stored metadata; it touches the corpus, so it has not been done.
+- **Stored titles predate the parser fix.** Four of the five indexed records already carry a correct title. One — LoRA `doc_e9a0d3128767` — stores `L RA: L -R A L L - M`, because the old largest-font heuristic collected single glyphs from a letter-spaced small-caps title. The frontend corrects it through a one-entry display table (`frontend/src/lib/display.ts`) that every title-bearing view resolves through, and falls back to the filename for an unknown garbled record rather than inventing a title. Re-ingesting is **not** recommended: the corrected extractor now yields `LORA: LOW-RANK ADAPTATION OF LARGE LANGUAGE MODELS` (all-caps, worse to read than the table's title-case value), all five records are already at chunker `0.2.3`, and the only other effect would be rewriting five indexed documents and rebuilding the FAISS index for a cosmetic field. [docs/limitations.md](docs/limitations.md) records the assessment, including the one non-cosmetic consequence (the cross-paper misattribution guard cannot see "LoRA") and why it fails safe.
+- **Benchmark coverage is narrower than the corpus.** All 30 questions target LEMS (`doc_c67573ef50cc`); only Q-029 and Q-030 also involve GFWSVD. Attention, LoRA and DoRA have no gold annotations at all, so the retrieval figures describe two papers, and 32 of the 34 gold spans sit in one of them. The product handles a five-paper corpus; the *measurement* does not cover it.
 - **Methodological claims are heuristic.** Section-heading detection and table/figure classification are rules tuned on the papers in this corpus, not a general PDF-layout solution.
 
 ---
@@ -312,10 +330,11 @@ backend/app/
 frontend/
   app/, src/components/, src/lib/    workspace UI and API client
   tests/                             155 component and logic tests
-eval/           questions, gold spans, labelling protocol, run artifacts
-docs/           architecture.md, decisions.md (ADRs), limitations.md,
+eval/           questions, gold spans, labelling protocol, reviewer guide, run artifacts
+docs/           architecture.md, decisions.md (ADRs), limitations.md, portfolio.md,
                 benchmark-retrieval.md, benchmark-contradictions.md,
-                supplementary-corpus-shortlist.md
+                supplementary-corpus-shortlist.md, security-key-review.md,
+                validation-report.md
 data/           indexed documents and chunks (gitignored)
 ```
 
@@ -323,4 +342,4 @@ data/           indexed documents and chunks (gitignored)
 
 Contracts before implementations; unsupported claims flagged rather than dropped; contradictions documented with a reason rather than asserted; no Redis/Celery/Postgres until the MVP proves it needs them; and no number in this README that does not come from a run artifact in `eval/runs/` or a command output above.
 
-Further detail: [docs/architecture.md](docs/architecture.md), [docs/decisions.md](docs/decisions.md), [docs/limitations.md](docs/limitations.md), [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md), [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md), [docs/supplementary-corpus-shortlist.md](docs/supplementary-corpus-shortlist.md), [eval/LABELLING.md](eval/LABELLING.md).
+Further detail: [docs/architecture.md](docs/architecture.md), [docs/decisions.md](docs/decisions.md), [docs/limitations.md](docs/limitations.md), [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md), [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md), [docs/supplementary-corpus-shortlist.md](docs/supplementary-corpus-shortlist.md), [docs/security-key-review.md](docs/security-key-review.md), [docs/portfolio.md](docs/portfolio.md), [docs/validation-report.md](docs/validation-report.md), [eval/LABELLING.md](eval/LABELLING.md), [eval/HUMAN-REVIEW-GUIDE.md](eval/HUMAN-REVIEW-GUIDE.md).

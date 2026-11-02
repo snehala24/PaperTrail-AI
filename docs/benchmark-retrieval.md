@@ -121,6 +121,11 @@ larger corpus, but it is **not** a controlled comparison and no improvement clai
 The retrieval benchmark makes no live API calls; it loads the cached embedding and reranker models and
 the stored `data/` corpus, and writes `eval/runs/run_<timestamp>.json` without touching earlier files.
 
+**Reproducibility check (2026-11-02).** Re-running the offline suite at commit `2f7cdad` wrote
+[`../eval/runs/run_20261102_154437.json`](../eval/runs/run_20261102_154437.json), whose `combined`,
+`human_labeled` and `ai_draft` metric blocks and whose per-configuration failure lists are identical to
+`run_20261102_132940.json` — every figure on this page reproduces exactly, not approximately.
+
 ## What this page does not establish
 
 It does not establish answer quality, citation correctness, or contradiction detection — those are

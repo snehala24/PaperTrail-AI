@@ -157,6 +157,11 @@ Historical artifacts: `eval/runs/run_20261028_164333_conflicts.json`,
 `eval/runs/run_20261102_140403_conflicts.json` (same four rates, recorded before the relation-label
 dimension existed).
 
+**Reproducibility check (2026-11-02).** Re-running the scripted conflict runner at commit `2f7cdad`
+wrote [`../eval/runs/run_20261102_154550_conflicts.json`](../eval/runs/run_20261102_154550_conflicts.json):
+summary and per-question records identical to `run_20261102_150550_conflicts.json`, including Q-015's
+`unresolved` ledger relation and Q-030 still reported as blocked.
+
 ## Evidence 4 — the earlier one-sided case, stated without over-claiming
 
 In the previous round, a cross-paper apparent-conflict question abstained on the first attempt and, on
