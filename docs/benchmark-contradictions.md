@@ -116,6 +116,12 @@ Consequences for how its scores may be described:
   response is registered for a two-paper conflict. The block reason now says so instead of claiming a
   missing paper. The evaluated/blocked partition is unchanged (4 evaluated, 1 blocked), so no score
   moved.
+- The block decision is now structural rather than named: the loop consults
+  `SCRIPTED_QUESTION_IDS`, the set of questions the fixture actually has responses for, and the artifact
+  carries the blocked ids with their reasons in `summary.blocked_questions`. Two tests pin this in
+  `backend/tests/test_retrieval.py`: one fails if either runner ever decides sample membership by a
+  question id outside the scripted-fixture builder, and one fails if the registry and the builder's real
+  branches ever disagree (which would either silently skip a labelled question or crash mid-run).
 - Current scripted run: `eval/runs/run_20261102_140403_conflicts.json` — retrieval 4/4, citation
   verification 4/4, conflict detection 4/4, `overall_grounded_success_rate = 1.0` on the four
   scripted single-paper cases, Q-030 blocked. Read all of that as pipeline behaviour under a fixture

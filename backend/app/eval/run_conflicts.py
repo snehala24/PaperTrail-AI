@@ -155,6 +155,14 @@ def load_conflict_benchmark_data(eval_dir: Path) -> Tuple[List[BenchmarkQuestion
     return questions, gold_by_q
 
 
+# Question ids covered by build_deterministic_mock_for_question() below -- i.e. the cases this offline
+# runner can actually answer with a scripted response. The benchmark loop consults this registry instead
+# of carrying its own `question_id == "Q-0NN"` skip, so "blocked" stays a property of the fixture set and
+# a newly labelled question is never silently dropped from the denominator.
+# backend/tests/test_retrieval.py pins this set against the builder's real branches.
+SCRIPTED_QUESTION_IDS = frozenset({"Q-005", "Q-006", "Q-015", "Q-017"})
+
+
 def build_deterministic_mock_for_question(
     question_id: str,
 ) -> Tuple[Optional[List[str]], Dict[str, Any]]:
@@ -304,7 +312,9 @@ def run_conflicts_eval(
     """
     Execute repeatable offline apparent-conflict benchmark evaluation.
     - Loads all 5 apparent_conflict questions.
-    - Flags Q-030 as BLOCKED (no scripted offline response for a cross-paper conflict; it is not counted as a pass or a failure).
+    - Blocks (never scores) any question this fixture set cannot answer offline: missing second paper,
+      placeholder gold, or no scripted response in SCRIPTED_QUESTION_IDS. Blocked questions are not
+      counted as a pass or a failure.
     - Evaluates retrieval, 3-layer verification, and conflict detection on evaluable questions.
     - Generates sanitized benchmark artifact.
     """
@@ -339,12 +349,11 @@ def run_conflicts_eval(
             or "doc_gfwsvd_placeholder" in q.target_doc_ids
             or any("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")) for g in golds)
         )
-        # Q-030's corpus prerequisite is now satisfied — GFWSVD is indexed and both of its gold spans
-        # resolve against stored chunks — but this runner is deterministic and offline: it answers each
-        # question through a scripted MockLLMProvider response, and no scripted response exists for a
-        # two-paper conflict. Fabricating one would score the runner, not the product, so the question
-        # stays out of the denominator and is covered by live validation instead.
-        no_scripted_response = qid == "Q-030"
+        # A cross-paper question can satisfy every corpus prerequisite and still be unevaluable here:
+        # this runner is deterministic and offline, and each scripted response above names verbatim
+        # quotes from single-paper chunks. Fabricating a two-paper response would score the fixture, not
+        # the product, so such a question stays out of the denominator and is covered by live validation.
+        no_scripted_response = qid not in SCRIPTED_QUESTION_IDS
 
         if missing_second_paper or no_scripted_response:
             blocked_count += 1
@@ -357,9 +366,9 @@ def run_conflicts_eval(
                 "block_reason": (
                     "Cross-paper question requires a second paper (GFWSVD / TODO_GFWSVD_SHA256) that is not yet ingested into the corpus."
                     if missing_second_paper
-                    else "Both papers are indexed and both gold spans verify against stored chunks, but this offline runner has no "
-                         "scripted deterministic response for a cross-paper conflict; the case is covered by live end-to-end validation "
-                         "rather than counted as a pass here."
+                    else "The corpus prerequisite is satisfied, but this offline runner has no scripted deterministic response for this "
+                         "question (SCRIPTED_QUESTION_IDS covers only single-paper conflicts); the case is covered by live end-to-end "
+                         "validation rather than counted as a pass here."
                 ),
                 "target_doc_ids": q.target_doc_ids,
                 "retrieval_success": None,
@@ -512,6 +521,18 @@ def run_conflicts_eval(
         "per_question_results": results_per_question,
     }
 
+    # Additive, self-describing view of the blocked set. The legacy counter name predates the second
+    # block reason (no scripted response) and stays for artifact compatibility; this list is what the
+    # summary table prints, so a blocked question can never be described by a stale hardcoded id.
+    run_record["summary"]["blocked_questions"] = [
+        {
+            "question_id": r["question_id"],
+            "block_reason": r.get("block_reason"),
+        }
+        for r in results_per_question
+        if not r.get("evaluable")
+    ]
+
     if save_artifact:
         output_path = runs_dir / f"{run_record['run_id']}.json"
         with open(output_path, "w", encoding="utf-8") as f:
@@ -526,9 +547,11 @@ def print_conflict_results_table(record: Dict[str, Any]):
     print("\n" + "=" * 90)
     print("  PAPERTRAIL AI: APPARENT-CONFLICT BENCHMARK EVALUATION (DAY 3)")
     print("=" * 90)
+    blocked = s.get("blocked_questions", [])
+    blocked_label = ", ".join(b["question_id"] for b in blocked) if blocked else "none"
     print(f"  Total Apparent-Conflict Questions : {s['total_conflict_questions']}")
     print(f"  Evaluated (Single-Paper Corpus)  : {s['evaluated_questions']}")
-    print(f"  Blocked (not evaluable offline)  : {s['blocked_pending_second_paper']} (Q-030 — see block_reason)")
+    print(f"  Blocked (not evaluable offline)  : {s['blocked_pending_second_paper']} ({blocked_label} — see block_reason)")
     print(f"  Retrieval Success Rate           : {s['retrieval_success_count']}/{s['evaluated_questions']} ({s['retrieval_success_rate'] * 100:.1f}%)")
     print(f"  Citation Verification Rate       : {s['citation_verification_success_count']}/{s['evaluated_questions']} ({s['citation_verification_success_rate'] * 100:.1f}%)")
     print(f"  Conflict Detection Correctness   : {s['conflict_detection_success_count']}/{s['evaluated_questions']} ({s['conflict_detection_success_rate'] * 100:.1f}%)")

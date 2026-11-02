@@ -59,7 +59,9 @@ PaperTrail makes each of them a visible, checkable object:
      │
      ▼
 [Conflict analyser]   supports / apparent_conflict / contradicts / unresolved,
-     │                both sides required to be grounded in retrieved chunks
+     │                a structured comparison requires both sides to back a verified
+     │                claim; a retrieved-but-uncited disagreement becomes an
+     │                answer-level note, never a fabricated ledger edge
      ▼
 [POST /answer]  →  Next.js workspace (ledger, comparisons, abstention, history)
 ```
@@ -207,7 +209,7 @@ Run [`eval/runs/run_20261029_073045.json`](eval/runs/run_20261029_073045.json) (
 
 ### Apparent-conflict results
 
-Run [`eval/runs/run_20261029_072737_conflicts.json`](eval/runs/run_20261029_072737_conflicts.json): of 5 conflict questions, 4 were evaluable and 1 blocked pending a second paper. On those 4, retrieval, citation verification, and conflict detection each succeeded 4/4, with `overall_grounded_success_rate = 1.0`. This was measured before the verbatim-quote precheck and the both-sides-grounding filter were added, so it is a floor to improve on rather than a current score.
+Run [`eval/runs/run_20261102_140403_conflicts.json`](eval/runs/run_20261102_140403_conflicts.json) (and the earlier [`run_20261029_072737_conflicts.json`](eval/runs/run_20261029_072737_conflicts.json)): of 5 conflict questions, 4 are evaluable and 1 is blocked. On those 4, retrieval, citation verification, and conflict detection each succeeded 4/4, with `overall_grounded_success_rate = 1.0`. The 2026-10-29 run predates the verbatim-quote precheck and the both-sides-grounding filter, so it is a floor to improve on rather than a current score. The blocked case is Q-030, a cross-paper question: both papers are now indexed and both of its gold spans verify, but this runner answers every question through a scripted response and no scripted response exists for a two-paper conflict, so it is reported as blocked rather than scored.
 
 That runner is fully offline and deterministic — each question is answered through a scripted `MockLLMProvider` response — so what it establishes is that the grounding pipeline honours a conflict that has been handed to it. It does not establish that the system *finds* contradictions. Its Q-005 case is labelled `real_contradiction`, but it is a hand-written single-paper pair, not a cross-paper contradiction discovered in the corpus. [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md) records the separate search for a genuine one: across all 409 chunks, 302 opposition-bearing sentences and 30 cross-document candidate pairs were mined and **none survived the criteria for a genuine contradiction**, so no verified positive case exists in this corpus and contradiction detection is unproven rather than demonstrated.
 
