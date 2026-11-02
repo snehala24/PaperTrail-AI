@@ -7,12 +7,20 @@ as evidence of detection.
 
 ## Classification scheme
 
-| Category | Meaning | What a correct system response looks like |
-| --- | --- | --- |
-| **A — genuine contradiction** | Two papers assert opposite values for the *same* property, under comparable conditions, at the same granularity. | `comparison_type = contradicts`, both sides cited, both quotes verbatim, reason stated. |
-| **B — apparent conflict** | Statements look opposed but differ in metric, model, rank, allocation regime or evaluation conditions. | `apparent_conflict` with a `conflict_reason` naming the differing condition — never `contradicts`. |
-| **C — supporting** | Two papers say compatible or mutually reinforcing things. | `supports` or no relationship asserted. |
-| **D — unresolved** | Evidence is retrieved but the relationship cannot be established, or one side is missing. | `unresolved`, or an honest abstention. |
+Five categories, because "the relationship is not established" has two different causes with two
+different correct answers — one side has no grounded evidence, versus neither side does.
+
+| Category | Meaning | What a correct system response looks like | Enforced by |
+| --- | --- | --- | --- |
+| **A — genuine contradiction** | Two papers assert opposite values for the *same* property, under comparable conditions, at the same granularity. | `comparison_type = contradicts`, both sides cited, both quotes verbatim, reason stated. | `test_relation_taxonomy.py::test_genuine_contradiction_category_is_reachable_when_both_sides_are_grounded` (synthetic) |
+| **B — apparent conflict** | Statements look opposed but differ in metric, model, rank, allocation regime or evaluation conditions. | `apparent_conflict` with a `conflict_reason` naming the differing condition — never `contradicts`. | `test_contextual_disagreement_is_never_escalated_to_contradicts`, `test_cross_paper_genuine_apparent_conflict_retains_apparent_conflict` |
+| **C — compatible findings** | Two papers say compatible or mutually reinforcing things. | `supports`, or no relationship asserted; never a disagreement note out of thin air. | `test_compatible_findings_category_is_reported_as_supports_not_as_conflict` |
+| **D — one-sided evidence** | One side of the pair backs a verified claim; the other is retrieved but uncited, or absent altogether. | The reader is told the sources disagree. **No ledger edge** — a comparison naming a claim that does not exist corrupts the ledger. | `test_one_sided_evidence_is_noted_but_never_becomes_a_relationship`, `test_conflict_with_one_uncited_side_is_noted_but_not_promoted_to_a_comparison` |
+| **E — insufficient evidence** | Neither side is adequately grounded, or a requested paper returned nothing. | Honest abstention: zero claims, zero evidence links, zero comparisons, and the abstention names the missing paper. | `test_insufficient_evidence_abstains_and_claims_no_relationship_at_all`, `test_unsupported_comparison_incomplete_retrieval_abstains` |
+
+Two cross-cutting rules, tested separately: a relationship asserted **without a documented reason**
+is demoted to `unresolved`, and a conflict naming a chunk that was never retrieved for this question
+is dropped rather than surfaced.
 
 ## Headline result
 
@@ -87,9 +95,17 @@ evidence of contradiction detection.
 
 ### A-probe (does the pipeline escalate an apparent conflict to `contradicts`?)
 
-Not executed today — it requires a completed generation. Registered for the next quota window: ask B1
+Not executed live today — it requires a completed generation. Registered for the next quota window: ask B1
 and assert `comparison_type != "contradicts"` while both `doc_c67573ef50cc_p6_c5` and
 `doc_7fdb1200e823_p9_c4` appear as verified `evidence_links`.
+
+The **offline** half of this assertion is now automated, so the escalation risk is not resting only on a
+future live run: `test_contextual_disagreement_is_never_escalated_to_contradicts` drives a fixture that
+names an apparent conflict and checks the stored relation set is exactly `{apparent_conflict}`, and
+`test_relationship_asserted_without_a_reason_is_demoted_to_unresolved` checks that a bare `contradicts`
+claim with no reason cannot reach the ledger. The scripted benchmark additionally reports
+`contradicts_labels_emitted = []` on every evaluable question. What remains live-only is whether a real
+model, unscripted, chooses the conservative label.
 
 ## Evidence 3 — what the offline conflict benchmark actually proves
 
@@ -122,13 +138,24 @@ Consequences for how its scores may be described:
   `backend/tests/test_retrieval.py`: one fails if either runner ever decides sample membership by a
   question id outside the scripted-fixture builder, and one fails if the registry and the builder's real
   branches ever disagree (which would either silently skip a labelled question or crash mid-run).
-- Current scripted run: `eval/runs/run_20261102_140403_conflicts.json` — retrieval 4/4, citation
-  verification 4/4, conflict detection 4/4, `overall_grounded_success_rate = 1.0` on the four
+- Current scripted run: `eval/runs/run_20261102_150550_conflicts.json` — retrieval 4/4, citation
+  verification 4/4, conflict surfacing 4/4, `overall_grounded_success_rate = 1.0` on the four
   scripted single-paper cases, Q-030 blocked. Read all of that as pipeline behaviour under a fixture
   that is told the answer, not as detection accuracy.
+- The same run now also reports classification, separately: `relation_label_checked_count = 4`,
+  `relation_label_match_count = 0`, `contradicts_labels_emitted = []`. Each scripted response names a
+  conflicting chunk pair but supplies no `conflict_type` and no `conflict_reason`, so the pipeline's
+  reason-required guard declines to assert a relation — the ledger ends up with one `unresolved`
+  comparison (Q-015) and no comparison in Q-005, Q-006 and Q-017, where only one side of the pair backs
+  a verified claim. A 0/4 here is the expected reading, not a regression: the dimension exists to catch
+  an unearned `contradicts`, and it found none. Category A–E behaviour is asserted against explicitly
+  synthetic fixtures in `backend/tests/test_relation_taxonomy.py`, whose document ids
+  (`doc_00000000000a/b`) are reserved placeholders that cannot belong to an indexed paper.
 
 Historical artifacts: `eval/runs/run_20261028_164333_conflicts.json`,
-`eval/runs/run_20261029_072737_conflicts.json` (scripted, single-paper, unchanged).
+`eval/runs/run_20261029_072737_conflicts.json` (scripted, single-paper, unchanged), and
+`eval/runs/run_20261102_140403_conflicts.json` (same four rates, recorded before the relation-label
+dimension existed).
 
 ## Evidence 4 — the earlier one-sided case, stated without over-claiming
 
@@ -145,8 +172,16 @@ human sign-off before any conflict-detection accuracy number can be published.
 2. A corpus that actually contains a genuine contradiction — either two papers reporting opposite
    values for one metric under comparable conditions, or a paper contradicting itself. The present
    five papers do not (302 opposition-bearing sentences, 30 cross-document candidates, 0 survivors).
-3. A quota window in which B1/C1/E1 can complete, plus the A-probe assertion that the pipeline does
-   not escalate to `contradicts`.
+   Candidate papers to create that condition are shortlisted, with the opposing claims quoted verbatim
+   from both sides and one candidate already demoted as compatible rather than conflicting, in
+   [supplementary-corpus-shortlist.md](supplementary-corpus-shortlist.md) — `AWAITING USER APPROVAL`,
+   nothing downloaded or ingested. That document also records a same-claim numeric discrepancy already
+   visible in this corpus (the ingested PDF — file `2610.32878v1.pdf` — states "4.8 p.p." on p.1 where the current arXiv listing
+   states "4.7 p.p."), which is a version discrepancy rather than a research contradiction and is not
+   counted as a category-A case.
+3. A quota window in which B1/C1/E1 can complete. The A-probe assertion that the pipeline does not
+   escalate to `contradicts` is now automated offline (see the A-probe section above); what still needs
+   the quota window is the same assertion against an unscripted model on a real cross-paper pair.
 
 Re-run when 3 is available:
 
@@ -159,9 +194,11 @@ Re-run when 3 is available:
 
 | Claim | Status |
 | --- | --- |
+| The five evidence categories (contradiction / apparent conflict / compatible / one-sided / insufficient) produce different, correct system responses | **PASSED (offline, synthetic)** — `backend/tests/test_relation_taxonomy.py`, 8 tests, 2026-11-02. Synthetic fixtures only: this shows the decision logic separates the categories, not that real contradictions are found |
+| The pipeline never escalates a contextual disagreement to `contradicts`, and never carries a reasonless relationship label | **PASSED (offline)** — `test_contextual_disagreement_is_never_escalated_to_contradicts`, `test_relationship_asserted_without_a_reason_is_demoted_to_unresolved`, and `contradicts_labels_emitted = []` in `run_20261102_150550_conflicts.json` |
 | Apparent conflicts are distinguished from contradictions in unit tests (both sides grounded, reason required) | **PASSED** — `backend/tests/test_day4_cross_paper.py`, 41 tests, 2026-11-02 |
 | A retrieved-but-uncited chunk can no longer create a structured comparison | **PASSED** — new test `test_conflict_with_one_uncited_side_is_noted_but_not_promoted_to_a_comparison` |
 | The system abstains rather than inventing a cross-paper relationship when one paper has no evidence | **PASSED** — live case D1, 2026-11-02 |
-| The system detects a genuine contradiction in this corpus | **NOT ESTABLISHED** — no verified category-A case exists (mining above), and live B/C cases were BLOCKED by provider quota |
+| The system detects a genuine contradiction in this corpus | **NOT ESTABLISHED** — no verified category-A case exists (mining above), and live B/C cases were BLOCKED by provider quota. The scripted runner's relation-label match is 0/4 by design, so it contributes nothing here |
 | The offline conflict benchmark measures real model behaviour | **NOT ESTABLISHED** — it is deterministic mock-provider pipeline validation |
 | Contradiction-detection accuracy can be published | **BLOCKED** — requires human-verified gold labels |

@@ -209,9 +209,31 @@ Run [`eval/runs/run_20261029_073045.json`](eval/runs/run_20261029_073045.json) (
 
 ### Apparent-conflict results
 
-Run [`eval/runs/run_20261102_140403_conflicts.json`](eval/runs/run_20261102_140403_conflicts.json) (and the earlier [`run_20261029_072737_conflicts.json`](eval/runs/run_20261029_072737_conflicts.json)): of 5 conflict questions, 4 are evaluable and 1 is blocked. On those 4, retrieval, citation verification, and conflict detection each succeeded 4/4, with `overall_grounded_success_rate = 1.0`. The 2026-10-29 run predates the verbatim-quote precheck and the both-sides-grounding filter, so it is a floor to improve on rather than a current score. The blocked case is Q-030, a cross-paper question: both papers are now indexed and both of its gold spans verify, but this runner answers every question through a scripted response and no scripted response exists for a two-paper conflict, so it is reported as blocked rather than scored.
+Run [`eval/runs/run_20261102_150550_conflicts.json`](eval/runs/run_20261102_150550_conflicts.json) (and the earlier [`run_20261029_072737_conflicts.json`](eval/runs/run_20261029_072737_conflicts.json)): of 5 conflict questions, 4 are evaluable and 1 is blocked. On those 4, retrieval, citation verification, and conflict surfacing each succeeded 4/4, with `overall_grounded_success_rate = 1.0`. The 2026-10-29 run predates the verbatim-quote precheck and the both-sides-grounding filter, so it is a floor to improve on rather than a current score. The blocked case is Q-030, a cross-paper question: both papers are now indexed and both of its gold spans verify, but this runner answers every question through a scripted response and no scripted response exists for a two-paper conflict, so it is reported as blocked rather than scored.
 
-That runner is fully offline and deterministic — each question is answered through a scripted `MockLLMProvider` response — so what it establishes is that the grounding pipeline honours a conflict that has been handed to it. It does not establish that the system *finds* contradictions. Its Q-005 case is labelled `real_contradiction`, but it is a hand-written single-paper pair, not a cross-paper contradiction discovered in the corpus. [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md) records the separate search for a genuine one: across all 409 chunks, 302 opposition-bearing sentences and 30 cross-document candidate pairs were mined and **none survived the criteria for a genuine contradiction**, so no verified positive case exists in this corpus and contradiction detection is unproven rather than demonstrated.
+That 4/4 measures **surfacing**, not **classification**, and the runner now says so on its own. A fifth field, reported separately instead of folded into the rates above, checks whether the relation written to the ledger is the one the case deserves:
+
+| Dimension | Current scripted run | Reading |
+| --- | --- | --- |
+| Retrieval of the gold spans | 4/4 | the passages are found |
+| Citation verification (3 layers) | 4/4 | every quote is verbatim and entailed |
+| Conflict surfaced in the answer | 4/4 | the answer says "sources disagree" and names both chunks |
+| Relation label matches the case | **0/4** | the fixture names a conflict pair without a `conflict_type` or reason, so the pipeline declines to assert any relation |
+| Unearned `contradicts` labels | **0** | nothing was hardened into a contradiction |
+
+Look at the fourth row rather than the first three. The scripted fixtures omit the reason on purpose, and the pipeline's rule — a conflict label without a documented reason is not good enough — demotes all of them, which is why the ledger ends up with one `unresolved` comparison (Q-015) and no comparison at all in the other three, where only one side of the pair backs a verified claim. The failure mode this dimension watches for is the opposite one: an unearned `contradicts` reaching the ledger. Relation classification is asserted where it can be controlled, in `backend/tests/test_relation_taxonomy.py`, against explicitly synthetic fixtures with reserved placeholder document ids.
+
+The five evidence categories the product distinguishes, and where each is enforced:
+
+| Category | Ledger outcome | Proven by |
+| --- | --- | --- |
+| Genuine contradiction | `contradicts`, both sides grounded, reason required | `test_relation_taxonomy.py` (synthetic) |
+| Apparent conflict (differing setting, metric, or method) | `apparent_conflict` with the reason attached | `test_relation_taxonomy.py`, `test_day4_cross_paper.py` |
+| Compatible findings | `supports`, and no disagreement note invented | `test_relation_taxonomy.py` |
+| One-sided evidence | answer-level "sources disagree" note, **never** a ledger edge | `test_conflict_with_one_uncited_side_is_noted_but_not_promoted_to_a_comparison` |
+| Insufficient evidence | abstention with zero claims, zero comparisons | `test_relation_taxonomy.py`, `test_unsupported_comparison_incomplete_retrieval_abstains` |
+
+That runner is fully offline and deterministic — each question is answered through a scripted `MockLLMProvider` response — so what it establishes is that the grounding pipeline honours a conflict that has been handed to it. It does not establish that the system *finds* contradictions. Its Q-005 case is labelled `real_contradiction`, but it is a hand-written single-paper pair, not a cross-paper contradiction discovered in the corpus, and the pipeline records no relation for it. [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md) records the separate search for a genuine one: across all 409 chunks, 302 opposition-bearing sentences and 30 cross-document candidate pairs were mined and **none survived the criteria for a genuine contradiction**, so no verified positive case exists in this corpus and contradiction detection is unproven rather than demonstrated.
 
 ### Reproducing
 
@@ -292,7 +314,8 @@ frontend/
   tests/                             155 component and logic tests
 eval/           questions, gold spans, labelling protocol, run artifacts
 docs/           architecture.md, decisions.md (ADRs), limitations.md,
-                benchmark-retrieval.md, benchmark-contradictions.md
+                benchmark-retrieval.md, benchmark-contradictions.md,
+                supplementary-corpus-shortlist.md
 data/           indexed documents and chunks (gitignored)
 ```
 
@@ -300,4 +323,4 @@ data/           indexed documents and chunks (gitignored)
 
 Contracts before implementations; unsupported claims flagged rather than dropped; contradictions documented with a reason rather than asserted; no Redis/Celery/Postgres until the MVP proves it needs them; and no number in this README that does not come from a run artifact in `eval/runs/` or a command output above.
 
-Further detail: [docs/architecture.md](docs/architecture.md), [docs/decisions.md](docs/decisions.md), [docs/limitations.md](docs/limitations.md), [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md), [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md), [eval/LABELLING.md](eval/LABELLING.md).
+Further detail: [docs/architecture.md](docs/architecture.md), [docs/decisions.md](docs/decisions.md), [docs/limitations.md](docs/limitations.md), [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md), [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md), [docs/supplementary-corpus-shortlist.md](docs/supplementary-corpus-shortlist.md), [eval/LABELLING.md](eval/LABELLING.md).
