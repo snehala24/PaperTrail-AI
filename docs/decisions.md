@@ -13,13 +13,13 @@
 - **Consequences**: The system never silently drops unparseable pages, surfacing diagnostics to users and evaluators.
 
 ## ADR-003: Apparent Conflicts Instead of Definitive Contradictions
-- **Status**: Accepted (2026-10-26)
+- **Status**: Accepted (2026-10-26), **amended by ADR-011** (the wording predates the split between the two relation enums)
 - **Context**: Scientific papers rarely contradict each other in a vacuum; differences arise due to differing benchmark versions, preprocessing, hardware, or hyperparameter choices.
 - **Decision**: Label all conflicting evidence links as "apparent conflicts" requiring an explicit `conflict_reason`.
 - **Consequences**: Researchers receive actionable context explaining *why* papers differ rather than an unhelpful binary flag.
 
 ## ADR-004: Two-Step Citation Validation (Existence Before Support)
-- **Status**: Accepted (2026-10-26)
+- **Status**: Accepted (2026-10-26), **superseded in part by ADR-011** (a verbatim-quotation layer was inserted between the two phases, making the pipeline three layers)
 - **Context**: Generative models frequently hallucinate plausible-looking chunk IDs that do not exist, or reference valid chunk IDs that do not actually support the statement.
 - **Decision**: Validate citations in two explicit phases:
   1. **Phase 1 (Existence)**: Verify that the cited `chunk_id` exists in the retrieved context.
@@ -109,3 +109,47 @@
   7. *Separate Unanswerable Queries*: Evaluate retrieval metrics (Recall@k, MRR, nDCG) strictly on answerable questions with gold evidence; reserve unanswerable queries for Day 3 honest abstention. Compute 95% bootstrap confidence intervals (1000 resamples) and warn when $n < 30$.
   8. *Version Bump*: Advance `CHUNKER_VERSION` to `0.2.2`.
 - **Consequences**: Zero chunk ID gaps across all 34 pages of the real paper; `(15)` survives on page 5; references are strictly confined to pages 9–11; zero `figure_ref` chunks exceed 700 chars; benchmark reporting is fully honest and reproducible with statistical uncertainty intervals.
+
+## ADR-011: Three-Layer Citation Verification and a Two-Vocabulary Relation Taxonomy
+- **Status**: Accepted (2026-11-02) — written down now; the behaviour itself shipped earlier and this ADR
+  records the decision that ADR-003 and ADR-004 described only in part.
+- **Context**:
+  1. ADR-004 specified two phases (existence, then entailment). In practice a third failure mode dominated:
+     a citation to a chunk that really exists, in the right document, whose *quoted span* is not in that
+     chunk. Entailment between claim and full chunk text can pass while the quotation shown to the reader is
+     fabricated. That is exactly the defect a claim-to-evidence ledger exists to catch, and neither phase
+     caught it.
+  2. ADR-003 said conflicting evidence links are labelled "apparent conflicts". The schema never grew an
+     `apparent_conflict` member on `EvidenceRelation`, so the sentence reads as a bug to anyone comparing
+     the ADR with `backend/app/schemas/claim.py:6-18`.
+- **Decision**:
+  1. **Three deterministic-then-model layers**, in this order, with the cheap ones first: Layer 1 existence
+     in the retrieved set plus document-filter adherence; Layer 2 normalized exact verbatim substring test of
+     the quoted span against the chunk text; Layer 3 a separate temperature-0 entailment call. Layers 1 and 2
+     run together in `CitationVerifier.check_deterministic` and Layer 3 only executes if both pass.
+  2. **A `CitationCheck` cannot be half-valid.** The model validator enforces `exists=False` ⇒
+     `supports is None` and `status = invalid_reference`, and `exists=True` ⇒ status is not
+     `invalid_reference`. The L1 invariant is schema-enforced, not a convention a caller can forget.
+  3. **Two relation vocabularies, deliberately separate and neither renamed.** `EvidenceRelation`
+     (`supports, weakens, contradicts, contextualizes, insufficient`) describes one claim-to-chunk link and is
+     also the vocabulary of `expected_relation` in the gold benchmark. `ComparisonType`
+     (`supports, contradicts, apparent_conflict, unresolved`) describes a structured cross-paper relationship.
+     Adding `apparent_conflict` to the first, or `weakens` to the second, would merge a per-source judgement
+     with a between-source judgement and make the ledger ambiguous.
+  4. **Apparent conflict is expressed as relation + reason, not as a new enum value** at evidence level:
+     `contradicts` (or `weakens`) with a populated `conflict_reason`. At comparison level the category has its
+     own value. Both `apparent_conflict` and `contradicts` comparisons require a documented reason, and a
+     conflict label without one is demoted to `unresolved` rather than displayed.
+  5. **`unverified` is reserved for "not evaluated"** — provider failure, timeout, or an unparseable verdict —
+     so an unavailable verifier never reads as either confirmation or refutation.
+- **Consequences**:
+  - A fabricated quotation fails before any model call, which is both cheaper and harder to game.
+  - Benchmark gold cannot state "apparent_conflict" directly; a reviewer judging a conflict is judging
+    label *and* reason together. `eval/review_worksheet.md`, `eval/LABELLING.md` and
+    `eval/HUMAN-REVIEW-GUIDE.md` all say so, because the two `contradicts` items in the current dataset are in
+     exactly that disagreement state.
+  - ADR-003 and ADR-004 remain valid in intent and are annotated rather than rewritten; this ADR is the
+    current statement of what the code does.
+  - The frontend mirrors both enums one-for-one (`frontend/src/lib/types.ts:79-96`) and words the four
+    comparison labels in exactly one place (`frontend/src/lib/comparison-meta.tsx`), so a label cannot drift
+    between views.
