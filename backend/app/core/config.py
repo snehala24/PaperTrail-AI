@@ -39,7 +39,7 @@ class Settings(BaseModel):
     gemini_model: Optional[str] = os.getenv("GEMINI_MODEL")
     gemini_max_output_tokens: int = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
     gemini_thinking_level: Optional[str] = os.getenv("GEMINI_THINKING_LEVEL", "minimal")
-    gemini_timeout: float = float(os.getenv("GEMINI_TIMEOUT", "45.0"))
+    gemini_timeout: float = float(os.getenv("GEMINI_TIMEOUT", "25.0"))
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
     storage_dir: str = os.getenv("STORAGE_DIR", "./data")

@@ -53,6 +53,10 @@ htmlcov/
 *.pdf
 data/
 
+# Local working artifacts and logs (kept on disk, never committed)
+scratch/
+*.log
+
 
 
 # Frontend (Next.js)
@@ -60,6 +64,8 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.turbo/
+frontend/tsconfig.tsbuildinfo
+!frontend/src/lib/
 
 # OS / Editor
 .DS_Store

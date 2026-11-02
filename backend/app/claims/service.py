@@ -28,6 +28,7 @@ from backend.app.citations.verifier import (
 from backend.app.core.config import settings
 from backend.app.llm.base import LLMMessage, LLMProvider, LLMResponse
 from backend.app.llm.gemini import is_daily_quota_exhausted
+from backend.app.schemas import ScoredChunk, normalize_text_span
 from backend.app.retrieval.hybrid import HybridRetriever, ensure_retriever_indexed, retriever as default_retriever
 from backend.app.schemas import (
     AnswerRequest,
@@ -44,6 +45,41 @@ from backend.app.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _ensure_exact_quotes(claims: List[Dict[str, Any]], retrieved_chunks: List[ScoredChunk]) -> Tuple[bool, str]:
+    """Validate that each claim's quoted text is a non‑empty, normalized verbatim substring of its cited chunk.
+
+    Returns a tuple ``(is_valid, reason)`` where ``is_valid`` is ``True`` when all quotes pass.
+    ``reason`` contains a human‑readable error for the first failure encountered.
+    """
+    # Build a quick lookup from chunk_id to ScoredChunk
+    chunk_map: Dict[str, ScoredChunk] = {c.chunk_id: c for c in retrieved_chunks}
+
+    for claim in claims:
+        claim_id = claim.get("claim_id", "<unknown>")
+        # Quote must be present and non‑empty after normalization
+        quote = claim.get("quote")
+        if not isinstance(quote, str) or not quote:
+            return False, f"Claim '{claim_id}' missing or empty quote"
+        norm_quote = normalize_text_span(quote)
+        if not norm_quote:
+            return False, f"Claim '{claim_id}' quote normalizes to empty"
+
+        # At least one cited chunk_id is required (contract expects a single chunk per claim)
+        chunk_ids = claim.get("chunk_ids") or []
+        if not chunk_ids:
+            return False, f"Claim '{claim_id}' has no cited chunk ids"
+        cited_id = chunk_ids[0]
+        chunk = chunk_map.get(cited_id)
+        if chunk is None:
+            return False, f"Claim '{claim_id}' references missing chunk '{cited_id}'"
+
+        # Normalized chunk text
+        norm_chunk = normalize_text_span(chunk.text)
+        if norm_quote not in norm_chunk:
+            return False, f"Claim '{claim_id}' quote not found verbatim in cited chunk"
+    return True, ""
+
 
 # Emergency provisional retrieval safety cutoff: top rerank score below this cutoff
 # indicates completely unrelated evidence and immediately triggers abstention.
@@ -735,6 +771,21 @@ class AnswerService:
             )
 
         # -------------------------------------------------------------
+        # Exact quote validation (new step)
+        # -------------------------------------------------------------
+        quotes_ok, quote_err = _ensure_exact_quotes(cleaned_data["claims"], retrieved_results)
+        if not quotes_ok:
+            timings["total"] = round(time.perf_counter() - start_time, 4)
+            return AnswerResponse(
+                answer="I must abstain because a claim's quoted text does not match its cited chunk.",
+                evidence_links=[],
+                citation_checks=[],
+                status=AnswerStatus.ABSTAINED,
+                abstain_reason=quote_err,
+                timings=timings,
+            )
+
+        # -------------------------------------------------------------
         # Stage 3: Three-Layer Citation Verification
         # -------------------------------------------------------------
         t2 = time.perf_counter()
@@ -963,7 +1014,20 @@ class AnswerService:
                 logger.debug("Failed to parse ClaimComparison: %s", e)
 
         # Fallback 1: Ensure conflicts produce corresponding ClaimComparison if comparisons was not provided
-        conflicts = cleaned_data.get("conflicts", [])
+        # Grounding requirement (two levels, deliberately different):
+        #  * The answer-level "sources disagree" note keeps the Day 3 contract: it may only name chunks
+        #    that were actually retrieved as evidence for this question, never an invented reference.
+        #  * A structured ClaimComparison additionally requires BOTH sides to back a verified claim, so
+        #    the ledger never shows a relationship pointing at a claim id that does not exist.
+        all_conflicts = cleaned_data.get("conflicts", [])
+        retrieved_chunk_ids = {chunk.chunk_id for chunk in retrieved_results}
+        conflicts = [
+            conf
+            for conf in all_conflicts
+            if conf.get("chunk_id_a") in retrieved_chunk_ids
+            and conf.get("chunk_id_b") in retrieved_chunk_ids
+        ]
+        verified_evidence_chunk_ids = {link.chunk_id for link in evidence_links}
         if conflicts and not comparisons:
             for conf in conflicts:
                 chunk_a = conf.get("chunk_id_a")
@@ -972,25 +1036,36 @@ class AnswerService:
                 c_obj_b = chunk_lookup.get(chunk_b)
                 doc_a = getattr(c_obj_a, "doc_id", None) if c_obj_a else None
                 doc_b = getattr(c_obj_b, "doc_id", None) if c_obj_b else None
-                c_reason = conf.get("conflict_reason")
-                c_type_str = conf.get("conflict_type", "apparent_conflict").lower()
+                raw_conflict_reason = conf.get("conflict_reason")
+                if isinstance(raw_conflict_reason, str) and raw_conflict_reason.strip().lower() not in ("", "none", "null"):
+                    c_reason = raw_conflict_reason.strip()
+                else:
+                    c_reason = None
+                c_type_str = str(conf.get("conflict_type") or "unresolved").lower()
                 c_type = (
                     ComparisonType(c_type_str)
                     if c_type_str in [e.value for e in ComparisonType]
-                    else ComparisonType.APPARENT_CONFLICT
+                    else ComparisonType.UNRESOLVED
                 )
+                if c_type in (ComparisonType.APPARENT_CONFLICT, ComparisonType.CONTRADICTS) and not c_reason:
+                    c_type = ComparisonType.UNRESOLVED
+                # Second grounding level: a comparison is only emitted when BOTH sides back a verified
+                # claim. A retrieved-but-uncited chunk still earns the answer-level disagreement note above,
+                # but inventing a ClaimComparison whose claim_id resolves to no claim would corrupt the ledger.
+                if chunk_a not in verified_evidence_chunk_ids or chunk_b not in verified_evidence_chunk_ids:
+                    continue
                 link_a_match = next((l for l in evidence_links if l.chunk_id == chunk_a), None)
                 link_b_match = next((l for l in evidence_links if l.chunk_id == chunk_b), None)
-                ref_a = link_a_match.claim_id if link_a_match else chunk_a
-                ref_b = link_b_match.claim_id if link_b_match else chunk_b
+                if link_a_match is None or link_b_match is None:  # unreachable guard; membership was just proven
+                    continue
                 summary_text = (
                     f"Sources disagree between chunk '{chunk_a}' and chunk '{chunk_b}'"
                     + (f": {c_reason}" if c_reason else ".")
                 )
                 comparisons.append(
                     ClaimComparison(
-                        claim_id_a=ref_a,
-                        claim_id_b=ref_b,
+                        claim_id_a=link_a_match.claim_id,
+                        claim_id_b=link_b_match.claim_id,
                         doc_id_a=doc_a,
                         doc_id_b=doc_b,
                         comparison_type=c_type,

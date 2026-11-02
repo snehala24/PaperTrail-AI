@@ -30,8 +30,13 @@ def is_filename_like_title(title: str) -> bool:
 
 def extract_title_from_page_1(page: fitz.Page) -> Optional[str]:
     """
-    Extract title from largest-font text within the top 35% of page 1.
+    Extract the title from the largest-font *lines* within the top 35% of page 1.
     Excludes margin text and rotated arXiv sidebars.
+
+    Lines, not individual spans, are the unit of selection: titles set in small caps
+    (e.g. the arXiv LoRA paper) store the capital glyphs at the title size and the
+    smaller-caps glyphs at a reduced size, so filtering span-by-span used to return
+    only the capitals ("L RA: L -R A L L - M").
     """
     try:
         rect = page.rect
@@ -40,7 +45,7 @@ def extract_title_from_page_1(page: fitz.Page) -> Optional[str]:
     except Exception:
         return None
 
-    spans_by_size: List[Tuple[float, float, str]] = []
+    line_records: List[Tuple[float, float, str]] = []
     for b in blocks:
         if b.get("type") == 0:  # text block
             bbox = b.get("bbox", (0, 0, 0, 0))
@@ -49,21 +54,31 @@ def extract_title_from_page_1(page: fitz.Page) -> Optional[str]:
                 if bbox[0] < 45:
                     continue
                 for l in b.get("lines", []):
+                    span_texts: List[str] = []
+                    line_size = 0.0
                     for s in l.get("spans", []):
-                        text = s.get("text", "").strip()
-                        if not text or ARXIV_SIDEBAR_REGEX.match(text):
+                        raw_text = s.get("text", "")
+                        if ARXIV_SIDEBAR_REGEX.match(raw_text.strip()):
                             continue
-                        spans_by_size.append((float(s.get("size", 0)), float(bbox[1]), text))
+                        # Spans are style runs inside one line, not words, so they are concatenated
+                        # as-is: small caps store "L" + "O" + "RA" for "LORA", and the inter-word
+                        # gaps arrive as their own blank spans that must not be stripped away.
+                        span_texts.append(raw_text)
+                        line_size = max(line_size, float(s.get("size", 0)))
+                    joined = "".join(span_texts).strip()
+                    if joined:
+                        line_records.append((line_size, float(bbox[1]), joined))
 
-    if not spans_by_size:
+    if not line_records:
         return None
 
-    max_size = max(s[0] for s in spans_by_size)
-    title_parts = [
-        s[2] for s in spans_by_size
-        if s[0] >= max_size - 1.0
-    ]
+    max_size = max(r[0] for r in line_records)
+    title_parts = [r[2] for r in line_records if r[0] >= max_size - 1.0]
     title = " ".join(title_parts).strip()
+    # A title wrapped mid-word leaves "…LAN-" + "GUAGE MODELS"; rejoin only when both
+    # neighbours are capitals, which is how a hard line break inside an all-caps title reads.
+    title = re.sub(r"(?<=[A-Z])-\s+(?=[A-Z])", "", title)
+    title = re.sub(r"\s+", " ", title).strip()
     return title if title else None
 
 
@@ -234,6 +249,8 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
     current_section = None
     in_references = False
     image_pages: Set[int] = set()
+    textless_pages: Set[int] = set()
+    failed_pages: Set[int] = set()
 
     for page_idx in range(page_count):
         page_num = page_idx + 1
@@ -266,6 +283,7 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
                     dehyphed = dehyphenate(plain_text, doc_tokens_lower=doc_tokens_lower)
                     text_blocks = [dehyphed]
                 else:
+                    textless_pages.add(page_num)
                     extraction_warnings.append(
                         f"Page {page_num} has no extractable text; may be blank, scanned, or image-only."
                     )
@@ -281,14 +299,21 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
             all_chunks.extend(chunks)
         except Exception as exc:
             extraction_warnings.append(f"Page {page_num} failed extraction: {exc}")
+            failed_pages.add(page_num)
             continue
 
     if image_pages:
-        sorted_pages = sorted(image_pages)
-        page_str = ", ".join(str(p) for p in sorted_pages)
-        extraction_warnings.append(
-            f"{len(image_pages)} pages contain image blocks that were not extracted: pages {page_str}."
-        )
+        # Graphics are never interpreted, but the text on those same pages usually is.
+        # Say precisely which is which so the diagnostic cannot overstate the gap:
+        # pages with no text, and pages whose chunking raised, are excluded because on
+        # those pages nothing was actually indexed.
+        graphics_pages_with_text = sorted(image_pages - textless_pages - failed_pages)
+        if graphics_pages_with_text:
+            page_str = ", ".join(str(p) for p in graphics_pages_with_text)
+            extraction_warnings.append(
+                f"{len(graphics_pages_with_text)} page(s) contain figure graphics that are not "
+                f"read as data; captions and surrounding text on those pages were indexed: pages {page_str}."
+            )
 
     pdf_doc.close()
 

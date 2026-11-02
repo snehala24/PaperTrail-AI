@@ -6,7 +6,7 @@ Evaluates the five apparent_conflict benchmark questions from eval/questions.jso
 - Q-006 (KFAC-SVD vs SVD-LLM under uniform vs LEMS allocation; p.7)
 - Q-015 (GPU used: H200 for main experiments vs A100 for inference speed; p.6, p.26)
 - Q-017 (KL divergence vs MSE calibration metric; p.8)
-- Q-030 (Cross-paper: LEMS claim of GFWSVD degradation vs GFWSVD paper; pending second paper)
+- Q-030 (Cross-paper: LEMS claim of GFWSVD degradation vs GFWSVD paper; not evaluable offline — see the block reason)
 
 Evaluates three orthogonal dimensions:
 1. Retrieval Success: Are the required gold chunks retrieved in top-k?
@@ -153,6 +153,24 @@ def load_conflict_benchmark_data(eval_dir: Path) -> Tuple[List[BenchmarkQuestion
                     gold_by_q.setdefault(g.question_id, []).append(g)
 
     return questions, gold_by_q
+
+
+# Question ids covered by build_deterministic_mock_for_question() below -- i.e. the cases this offline
+# runner can actually answer with a scripted response. The benchmark loop consults this registry instead
+# of carrying its own `question_id == "Q-0NN"` skip, so "blocked" stays a property of the fixture set and
+# a newly labelled question is never silently dropped from the denominator.
+# backend/tests/test_retrieval.py pins this set against the builder's real branches.
+SCRIPTED_QUESTION_IDS = frozenset({"Q-005", "Q-006", "Q-015", "Q-017"})
+
+# What each fixture *intends* to demonstrate, expressed as the ledger relation it would need. The
+# scripted responses deliberately name conflicting chunks without naming a conflict_type or a reason,
+# so the pipeline is free to decide the label itself -- which means this dimension genuinely measures
+# something, and its result is reported separately from the three Day 3 rates rather than folded into
+# them. A fixture category absent from this map is not label-checked at all.
+EXPECTED_RELATION_BY_CATEGORY = {
+    "real_contradiction": "contradicts",
+    "apparent_conflict_differing_conditions": "apparent_conflict",
+}
 
 
 def build_deterministic_mock_for_question(
@@ -304,7 +322,9 @@ def run_conflicts_eval(
     """
     Execute repeatable offline apparent-conflict benchmark evaluation.
     - Loads all 5 apparent_conflict questions.
-    - Flags Q-030 (pending second paper) as BLOCKED_PENDING_SECOND_PAPER.
+    - Blocks (never scores) any question this fixture set cannot answer offline: missing second paper,
+      placeholder gold, or no scripted response in SCRIPTED_QUESTION_IDS. Blocked questions are not
+      counted as a pass or a failure.
     - Evaluates retrieval, 3-layer verification, and conflict detection on evaluable questions.
     - Generates sanitized benchmark artifact.
     """
@@ -325,6 +345,7 @@ def run_conflicts_eval(
     retrieval_success_count = 0
     verification_success_count = 0
     conflict_detection_success_count = 0
+    relation_label_success_count = 0
     overall_grounded_success_count = 0
     evaluated_count = 0
     blocked_count = 0
@@ -334,14 +355,18 @@ def run_conflicts_eval(
         golds = gold_by_q.get(qid, [])
 
         # Check multi-paper prerequisite / cross-paper isolation
-        is_blocked = (
+        missing_second_paper = (
             q.status == BenchmarkStatus.PENDING_SECOND_PAPER
             or "doc_gfwsvd_placeholder" in q.target_doc_ids
             or any("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")) for g in golds)
-            or q.question_id == "Q-030"
         )
+        # A cross-paper question can satisfy every corpus prerequisite and still be unevaluable here:
+        # this runner is deterministic and offline, and each scripted response above names verbatim
+        # quotes from single-paper chunks. Fabricating a two-paper response would score the fixture, not
+        # the product, so such a question stays out of the denominator and is covered by live validation.
+        no_scripted_response = qid not in SCRIPTED_QUESTION_IDS
 
-        if is_blocked:
+        if missing_second_paper or no_scripted_response:
             blocked_count += 1
             results_per_question.append({
                 "question_id": qid,
@@ -349,11 +374,18 @@ def run_conflicts_eval(
                 "question_type": "apparent_conflict",
                 "status": "BLOCKED_PENDING_SECOND_PAPER",
                 "evaluable": False,
-                "block_reason": "Cross-paper question requires second paper (GFWSVD / TODO_GFWSVD_SHA256) which is not yet ingested into corpus.",
+                "block_reason": (
+                    "Cross-paper question requires a second paper (GFWSVD / TODO_GFWSVD_SHA256) that is not yet ingested into the corpus."
+                    if missing_second_paper
+                    else "The corpus prerequisite is satisfied, but this offline runner has no scripted deterministic response for this "
+                         "question (SCRIPTED_QUESTION_IDS covers only single-paper conflicts); the case is covered by live end-to-end "
+                         "validation rather than counted as a pass here."
+                ),
                 "target_doc_ids": q.target_doc_ids,
                 "retrieval_success": None,
                 "citation_verification_success": None,
                 "conflict_detection_success": None,
+                "relation_labeling": {"checked": False, "success": None},
                 "overall_success": None,
             })
             continue
@@ -442,6 +474,22 @@ def run_conflicts_eval(
         if overall_success:
             overall_grounded_success_count += 1
 
+        # -------------------------------------------------------------
+        # 4. Relation-label conformance (reported, never folded into the three rates above)
+        # -------------------------------------------------------------
+        # "Conflict detection" above asks only whether disagreement was surfaced and named. This asks the
+        # sharper question: did the ledger carry the relation the case actually deserves? The scripted
+        # responses supply no conflict_type and no conflict_reason, so the pipeline's own guard ("a
+        # conflict label without a documented reason is not good enough") demotes every one of these to
+        # `unresolved`. That is correct behaviour and a false positive on this dimension is what matters:
+        # nothing here may come out as `contradicts`, because no verified contradiction exists in this
+        # corpus (see docs/benchmark-contradictions.md).
+        observed_relations = sorted({c.comparison_type.value for c in answer_resp.comparisons})
+        expected_relation = EXPECTED_RELATION_BY_CATEGORY.get(str(meta.get("conflict_category")))
+        relation_label_success = expected_relation is not None and expected_relation in observed_relations
+        if relation_label_success:
+            relation_label_success_count += 1
+
         results_per_question.append({
             "question_id": qid,
             "question": q.question,
@@ -469,6 +517,20 @@ def run_conflicts_eval(
                 "identifies_conflicting_chunks": identifies_chunks,
                 "expected_chunks": expected_chunks,
             },
+            "relation_labeling": {
+                "checked": expected_relation is not None,
+                "success": relation_label_success,
+                "relation_the_fixture_represents": expected_relation,
+                "relations_the_pipeline_emitted": observed_relations,
+                "interpretation": (
+                    "The scripted response names conflicting chunks but no conflict_type or conflict_reason, "
+                    "so the pipeline declines to assert a relationship. `contradicts` was never emitted, which "
+                    "is the required behaviour: no verified contradiction exists in this corpus."
+                    if not relation_label_success and "contradicts" not in observed_relations
+                    else "See observed relations against the fixture category; a `contradicts` label here would "
+                         "be fixture-driven, not evidence of detection."
+                ),
+            },
             "overall_success": overall_success,
             "final_answer": answer_resp.answer,
         })
@@ -478,6 +540,10 @@ def run_conflicts_eval(
     verification_rate = round(verification_success_count / evaluated_count, 4) if evaluated_count else 0.0
     conflict_rate = round(conflict_detection_success_count / evaluated_count, 4) if evaluated_count else 0.0
     overall_rate = round(overall_grounded_success_count / evaluated_count, 4) if evaluated_count else 0.0
+
+    label_checked = [r for r in results_per_question if r.get("relation_labeling", {}).get("checked")]
+    label_checked_count = len(label_checked)
+    relation_label_rate = round(relation_label_success_count / label_checked_count, 4) if label_checked_count else 0.0
 
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_record: Dict[str, Any] = {
@@ -497,9 +563,37 @@ def run_conflicts_eval(
             "conflict_detection_success_rate": conflict_rate,
             "overall_grounded_success_count": overall_grounded_success_count,
             "overall_grounded_success_rate": overall_rate,
+            # Reported separately on purpose: this is not a fifth pass rate that can lift the four above.
+            "relation_label_checked_count": label_checked_count,
+            "relation_label_match_count": relation_label_success_count,
+            "relation_label_match_rate": relation_label_rate,
+            "contradicts_labels_emitted": sorted(
+                r["question_id"]
+                for r in results_per_question
+                if "contradicts" in r.get("relation_labeling", {}).get("relations_the_pipeline_emitted", [])
+            ),
+            "relation_label_note": (
+                "The scripted fixtures describe the kind of disagreement each case represents; they deliberately "
+                "omit conflict_type and conflict_reason, so the pipeline declines to assert a ledger relation and "
+                "this rate is 0. The dimension exists to catch the opposite failure -- an unearned `contradicts` "
+                "label reaching the ledger. Relation-label behaviour is asserted instead by the explicitly synthetic "
+                "conformance suite in backend/tests/test_relation_taxonomy.py."
+            ),
         },
         "per_question_results": results_per_question,
     }
+
+    # Additive, self-describing view of the blocked set. The legacy counter name predates the second
+    # block reason (no scripted response) and stays for artifact compatibility; this list is what the
+    # summary table prints, so a blocked question can never be described by a stale hardcoded id.
+    run_record["summary"]["blocked_questions"] = [
+        {
+            "question_id": r["question_id"],
+            "block_reason": r.get("block_reason"),
+        }
+        for r in results_per_question
+        if not r.get("evaluable")
+    ]
 
     if save_artifact:
         output_path = runs_dir / f"{run_record['run_id']}.json"
@@ -515,16 +609,20 @@ def print_conflict_results_table(record: Dict[str, Any]):
     print("\n" + "=" * 90)
     print("  PAPERTRAIL AI: APPARENT-CONFLICT BENCHMARK EVALUATION (DAY 3)")
     print("=" * 90)
+    blocked = s.get("blocked_questions", [])
+    blocked_label = ", ".join(b["question_id"] for b in blocked) if blocked else "none"
     print(f"  Total Apparent-Conflict Questions : {s['total_conflict_questions']}")
     print(f"  Evaluated (Single-Paper Corpus)  : {s['evaluated_questions']}")
-    print(f"  Blocked (Pending Second Paper)   : {s['blocked_pending_second_paper']} (Q-030)")
+    print(f"  Blocked (not evaluable offline)  : {s['blocked_pending_second_paper']} ({blocked_label} — see block_reason)")
     print(f"  Retrieval Success Rate           : {s['retrieval_success_count']}/{s['evaluated_questions']} ({s['retrieval_success_rate'] * 100:.1f}%)")
     print(f"  Citation Verification Rate       : {s['citation_verification_success_count']}/{s['evaluated_questions']} ({s['citation_verification_success_rate'] * 100:.1f}%)")
     print(f"  Conflict Detection Correctness   : {s['conflict_detection_success_count']}/{s['evaluated_questions']} ({s['conflict_detection_success_rate'] * 100:.1f}%)")
     print(f"  Overall Grounded Success Rate    : {s['overall_grounded_success_count']}/{s['evaluated_questions']} ({s['overall_grounded_success_rate'] * 100:.1f}%)")
+    print(f"  Relation Label Match             : {s['relation_label_match_count']}/{s['relation_label_checked_count']} ({s['relation_label_match_rate'] * 100:.1f}%)  [reported, not a pass rate]")
+    print(f"  Unearned 'contradicts' Labels    : {len(s['contradicts_labels_emitted'])} {s['contradicts_labels_emitted'] or '(none)'}")
     print("=" * 90)
 
-    hdr = f"{'Q-ID':<7} | {'Category':<32} | {'Retrieval':<10} | {'Verification':<13} | {'Conflict Flag':<14} | {'Status':<16}"
+    hdr = f"{'Q-ID':<7} | {'Category':<32} | {'Retrieval':<10} | {'Verification':<13} | {'Conflict Flag':<14} | {'Ledger Relation':<16} | {'Status':<16}"
     print(hdr)
     print("-" * len(hdr))
 
@@ -532,16 +630,21 @@ def print_conflict_results_table(record: Dict[str, Any]):
         qid = item["question_id"]
         cat = item.get("conflict_category") or "cross_paper (pending)"
         if not item.get("evaluable"):
-            print(f"{qid:<7} | {cat:<32} | {'N/A':<10} | {'N/A':<13} | {'N/A':<14} | {'BLOCKED':<16}")
+            print(f"{qid:<7} | {cat:<32} | {'N/A':<10} | {'N/A':<13} | {'N/A':<14} | {'N/A':<16} | {'BLOCKED':<16}")
             continue
 
         ret_str = "PASS" if item["retrieval"]["success"] else "FAIL"
         ver_str = "PASS" if item["citation_verification"]["success"] else "FAIL"
         cnf_str = "PASS" if item["conflict_detection"]["success"] else "FAIL"
+        rel = item.get("relation_labeling", {})
+        rel_str = ", ".join(rel.get("relations_the_pipeline_emitted", [])) or "none"
         sta_str = "GROUNDED" if item["overall_success"] else "FAILED"
-        print(f"{qid:<7} | {cat:<32} | {ret_str:<10} | {ver_str:<13} | {cnf_str:<14} | {sta_str:<16}")
+        print(f"{qid:<7} | {cat:<32} | {ret_str:<10} | {ver_str:<13} | {cnf_str:<14} | {rel_str:<16} | {sta_str:<16}")
 
     print("=" * 90)
+    print("  Relation Label Match is deliberately reported at 0 for these fixtures: they name conflicting")
+    print("  chunks without a conflict_type or reason, so the pipeline declines to assert a relation.")
+    print("  The dimension guards against the opposite failure -- an unearned 'contradicts' in the ledger.")
 
 
 def main():

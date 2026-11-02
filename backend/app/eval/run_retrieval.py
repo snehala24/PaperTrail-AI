@@ -12,6 +12,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 from backend.app.schemas import (
     BenchmarkQuestion,
+    BenchmarkQuestionType,
     BenchmarkStatus,
     GoldEvidence,
     Chunk,
@@ -58,6 +59,33 @@ def load_benchmark_data(eval_dir: Path) -> Tuple[List[BenchmarkQuestion], Dict[s
                     gold_by_q.setdefault(g.question_id, []).append(g)
 
     return questions, gold_by_q
+
+
+def is_evaluable_question(q: BenchmarkQuestion, golds: List[GoldEvidence]) -> Tuple[bool, str]:
+    """
+    Decide whether a question belongs in the scored sample.
+
+    This exists as a named predicate because the runner used to carry ad-hoc `question_id in (...)`
+    skips alongside it. Those silently removed labelled cross-paper questions from the denominator and
+    reported n=23 as if it were the whole benchmark. The only legitimate reasons to drop a question are
+    structural: it is an abstention probe, its second paper has not been labelled yet, or none of its
+    gold rows are real annotations.
+    """
+    if q.question_type == BenchmarkQuestionType.UNANSWERABLE:
+        return False, "unanswerable (reserved for abstention testing)"
+    if q.status == BenchmarkStatus.PENDING_SECOND_PAPER:
+        return False, "gold labels still pending a second paper"
+    if not has_real_gold(golds):
+        return False, "no usable gold annotation"
+    return True, "evaluable"
+
+
+def has_real_gold(golds: List[GoldEvidence]) -> bool:
+    """True when at least one gold row is a filled-in annotation rather than a TODO placeholder."""
+    return any(
+        not ("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")))
+        for g in golds
+    )
 
 
 def ensure_eval_corpus(gold_by_q: Dict[str, List[GoldEvidence]]) -> List[Chunk]:
@@ -207,19 +235,15 @@ def run_retrieval_eval() -> Dict[str, Any]:
     failure_analysis: List[Dict[str, Any]] = []
 
     for q in questions:
-        # Exclude unanswerables and cross-paper pending items from evaluation
-        if q.question_type == "unanswerable" or q.status == BenchmarkStatus.PENDING_SECOND_PAPER:
-            continue
-        if q.question_id in ("Q-029", "Q-030"):
+        g_items = gold_by_q.get(q.question_id, [])
+        evaluable, _skip_reason = is_evaluable_question(q, g_items)
+        if not evaluable:
             continue
 
-        g_items = gold_by_q.get(q.question_id, [])
         active_golds = [
             g for g in g_items
             if not ("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")))
         ]
-        if not active_golds:
-            continue
 
         q_type = q.question_type.value if hasattr(q.question_type, "value") else str(q.question_type)
 
@@ -302,7 +326,6 @@ def run_retrieval_eval() -> Dict[str, Any]:
         q for q in questions
         if (q.labelled_by != "assistant" or q.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED, BenchmarkStatus.VERIFIED))
         and q.status != BenchmarkStatus.PENDING_SECOND_PAPER
-        and q.question_id not in ("Q-029", "Q-030")
     ]
     ai_questions = [
         q for q in questions

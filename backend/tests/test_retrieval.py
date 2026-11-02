@@ -1,11 +1,17 @@
 import pytest
+from pathlib import Path
 from unittest.mock import MagicMock
 from backend.app.schemas import Chunk, ChunkKind
 from backend.app.retrieval.bm25 import BM25Index
 from backend.app.retrieval.dense import DenseIndex
 from backend.app.retrieval.fusion import reciprocal_rank_fusion
 from backend.app.retrieval.hybrid import HybridRetriever, select_allowed_candidates
-from backend.app.eval.run_retrieval import build_eval_rrf_pool
+from backend.app.eval.run_retrieval import (
+    build_eval_rrf_pool,
+    is_evaluable_question,
+    load_benchmark_data,
+)
+from backend.app.schemas import BenchmarkQuestion, BenchmarkQuestionType, BenchmarkStatus, GoldEvidence
 
 
 @pytest.fixture
@@ -613,3 +619,164 @@ def test_q012_reranking_fix_reproduction():
     assert gold_result.doc_id == "doc_c67573ef50cc"
     assert "we use the Gurobi solver" in gold_result.text
     assert gold_result.rerank_rank <= 5
+
+
+# ---------------------------------------------------------------------------
+# Evaluated-sample selection. A hardcoded question-id skip once quietly removed
+# two labelled cross-paper questions from the denominator and the run still
+# reported itself as "the benchmark", so the exclusion rule is now a named
+# predicate with tests rather than a line inside the loop.
+# ---------------------------------------------------------------------------
+
+def _question(question_id: str, q_type: str, status: str = "human_draft") -> BenchmarkQuestion:
+    return BenchmarkQuestion(
+        question_id=question_id,
+        question=f"Sample {question_id}",
+        question_type=q_type,
+        status=status,
+        labelled_by="snehala24",
+        target_doc_ids=["doc_c67573ef50cc"],
+    )
+
+
+def _gold(question_id: str, sha: str = "c67573ef50cc" + "0" * 56) -> GoldEvidence:
+    return GoldEvidence(
+        gold_id=f"GOLD-{question_id}",
+        question_id=question_id,
+        doc_sha256=sha,
+        page=6,
+        answer_span="we use the Gurobi solver",
+        expected_relation="supports",
+        status="human_draft",
+        labelled_by="snehala24",
+    )
+
+
+def test_labelled_question_with_real_gold_is_evaluable():
+    ok, reason = is_evaluable_question(_question("Q-099", "factual"), [_gold("Q-099")])
+    assert ok is True
+    assert reason == "evaluable"
+
+
+def test_cross_paper_questions_are_not_excluded_by_their_ids():
+    """Q-029/Q-030 are labelled and both papers are indexed; nothing may drop them by name."""
+    for qid in ("Q-029", "Q-030"):
+        for q_type in ("comparative", "apparent_conflict"):
+            ok, _ = is_evaluable_question(_question(qid, q_type), [_gold(qid), _gold(qid)])
+            assert ok is True, qid
+
+
+def test_unanswerable_probes_stay_out_of_the_scored_sample():
+    ok, reason = is_evaluable_question(_question("Q-009", "unanswerable"), [])
+    assert ok is False
+    assert "abstention" in reason
+
+
+def test_enum_valued_question_type_is_treated_the_same_as_the_string_form():
+    ok, _ = is_evaluable_question(_question("Q-010", BenchmarkQuestionType.UNANSWERABLE), [_gold("Q-010")])
+    assert ok is False
+
+
+def test_pending_second_paper_questions_are_excluded_with_a_structural_reason():
+    ok, reason = is_evaluable_question(
+        _question("Q-031", "comparative", status=BenchmarkStatus.PENDING_SECOND_PAPER),
+        [_gold("Q-031")],
+    )
+    assert ok is False
+    assert "second paper" in reason
+
+
+def test_placeholder_only_gold_excludes_the_question():
+    todo_gold = _gold("Q-032", sha="TODO_SHA256" + "0" * 56)
+    ok, reason = is_evaluable_question(_question("Q-032", "factual"), [todo_gold])
+    assert ok is False
+    assert "gold" in reason
+
+    # A real annotation alongside a placeholder is enough to score the question.
+    ok2, _ = is_evaluable_question(_question("Q-032", "factual"), [todo_gold, _gold("Q-032")])
+    assert ok2 is True
+
+
+def test_sample_membership_is_never_decided_by_a_question_id():
+    """
+    Guards the exact regression that produced the silent n=23.
+
+    Neither offline runner may drop a question from its denominator because of that question's name.
+    The one legitimate place a question id appears in code is the scripted-fixture builder in
+    run_conflicts.py, where the id selects which canned response to play -- that dispatch decides what
+    the fixture *says*, never whether a question is scored. Everything else must be structural:
+    question type, label status, or whether the gold annotation is real.
+    """
+    import pathlib
+    import re
+
+    id_comparison = re.compile(r"""\b(?:question_?id|qid)\s*(?:==|!=|in)\b.*["']Q-\d+""")
+
+    def code_lines_outside_fixture_builder(text: str):
+        in_fixture = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("def build_deterministic_mock_for_question"):
+                in_fixture = True
+            elif in_fixture and stripped.startswith("def "):
+                in_fixture = False
+            if stripped.startswith("#") or in_fixture:
+                continue
+            yield line
+
+    for name in ("run_retrieval.py", "run_conflicts.py"):
+        text = (pathlib.Path("backend/app/eval") / name).read_text(encoding="utf-8")
+        offenders = [
+            line.strip() for line in code_lines_outside_fixture_builder(text)
+            if id_comparison.search(line)
+        ]
+        assert not offenders, f"{name} decides sample membership by question id: {offenders}"
+
+
+def test_scripted_fixture_registry_matches_the_fixture_builder():
+    """
+    run_conflicts.py blocks any question with no scripted response, and it learns that from
+    SCRIPTED_QUESTION_IDS. That registry must agree with what the builder actually returns, otherwise a
+    question is either silently skipped or crashes mid-run.
+    """
+    from backend.app.eval.run_conflicts import (
+        SCRIPTED_QUESTION_IDS,
+        build_deterministic_mock_for_question,
+    )
+
+    for qid in SCRIPTED_QUESTION_IDS:
+        responses, meta = build_deterministic_mock_for_question(qid)
+        assert responses, f"{qid} is registered but has no scripted response"
+        assert meta.get("expected_conflicting_chunks"), f"{qid} has no expected chunks"
+
+    questions, _ = load_benchmark_data(Path("eval"))
+    conflict_ids = {
+        q.question_id for q in questions
+        if str(getattr(q.question_type, "value", q.question_type)) == "apparent_conflict"
+    }
+    unscripted = sorted(conflict_ids - set(SCRIPTED_QUESTION_IDS))
+    for qid in unscripted:
+        responses, _meta = build_deterministic_mock_for_question(qid)
+        assert responses is None, f"{qid} is unregistered yet the builder answers it"
+    assert unscripted, "the fixture registry covers every conflict question; blocking is untested"
+
+
+def test_evaluated_sample_covers_every_answerable_labelled_question():
+    """
+    Counts the live benchmark files rather than a fixture: 25 answerable with real gold, 5 abstention
+    probes. If a label is ever added or a placeholder filled in, this test is where the sample size
+    change has to be acknowledged.
+    """
+    import pathlib
+
+    eval_dir = pathlib.Path("eval")
+    questions, gold_by_q = load_benchmark_data(eval_dir)
+    assert len(questions) == 30
+
+    scored = [q.question_id for q in questions if is_evaluable_question(q, gold_by_q.get(q.question_id, []))[0]]
+    reserved = [q.question_id for q in questions if q.question_type == "unanswerable"]
+
+    assert len(scored) == 25
+    assert len(reserved) == 5
+    assert set(scored).isdisjoint(reserved)
+    assert {"Q-029", "Q-030"} <= set(scored)
