@@ -396,6 +396,8 @@ def test_conflict_eval_runner_end_to_end(tmp_path: Path):
     - 100% retrieval success on evaluated (4/4)
     - 100% citation verification success on evaluated (4/4)
     - 100% conflict detection correctness on evaluated (4/4)
+    - relation-label dimension reported separately, with no unearned 'contradicts' anywhere
+    - blocked set named in the artifact by question id and reason
     - Timestamped run record written to disk
     - JSON output contains no API keys or secrets
     """
@@ -426,6 +428,21 @@ def test_conflict_eval_runner_end_to_end(tmp_path: Path):
     assert per_q["Q-017"]["conflict_category"] == "apparent_conflict_differing_conditions"
     assert per_q["Q-030"]["status"] == "BLOCKED_PENDING_SECOND_PAPER"
 
+    # Blocked set is self-describing, so the printed table can never name a stale question id.
+    blocked = {b["question_id"] for b in summary["blocked_questions"]}
+    assert blocked == {"Q-030"}
+    assert summary["blocked_questions"][0]["block_reason"]
+
+    # Relation-label dimension: the scripted fixtures carry no conflict_type and no reason, so the
+    # pipeline must decline to assert a relation -- and above all must never mint a `contradicts`.
+    assert summary["relation_label_checked_count"] == 4
+    assert summary["contradicts_labels_emitted"] == []
+    for qid in ("Q-005", "Q-006", "Q-015", "Q-017"):
+        emitted = per_q[qid]["relation_labeling"]["relations_the_pipeline_emitted"]
+        assert "contradicts" not in emitted, f"{qid} escalated a scripted conflict to contradicts"
+        if emitted:
+            assert set(emitted) <= {"apparent_conflict", "unresolved"}, f"{qid} emitted {emitted}"
+
     # Verify artifact was written and contains no secrets
     saved_files = list(runs_dir.glob("*.json"))
     assert len(saved_files) == 1
@@ -434,3 +451,29 @@ def test_conflict_eval_runner_end_to_end(tmp_path: Path):
     assert "AIzaSy" not in content
     parsed = json.loads(content)
     assert parsed["run_id"] == record["run_id"]
+
+
+def test_every_scripted_fixture_category_has_an_expected_relation_label():
+    """
+    The relation-label dimension is only meaningful if each fixture category maps to a ledger relation.
+    Without this check a new fixture category would silently become unchecked, and the reported rate
+    would quietly describe a smaller set of questions than the benchmark actually ran.
+    """
+    from backend.app.eval.run_conflicts import (
+        EXPECTED_RELATION_BY_CATEGORY,
+        SCRIPTED_QUESTION_IDS,
+        build_deterministic_mock_for_question,
+    )
+    from backend.app.schemas import ComparisonType
+
+    categories = {
+        build_deterministic_mock_for_question(qid)[1].get("conflict_category")
+        for qid in sorted(SCRIPTED_QUESTION_IDS)
+    }
+    assert None not in categories, "a scripted fixture is missing its conflict_category"
+    unmapped = categories - set(EXPECTED_RELATION_BY_CATEGORY)
+    assert not unmapped, f"fixture categories with no expected relation: {unmapped}"
+
+    valid = {e.value for e in ComparisonType}
+    for relation in EXPECTED_RELATION_BY_CATEGORY.values():
+        assert relation in valid, f"{relation} is not a ledger relation the schema can express"

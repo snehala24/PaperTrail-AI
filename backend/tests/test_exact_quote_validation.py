@@ -81,17 +81,14 @@ def make_chunk(chunk_id="doc_c67573ef50cc_p6_c2", doc_id="doc_c67573ef50cc", pag
     )
 
 def run_sync(coro):
-    """Execute an async coroutine synchronously (compatible with Windows)."""
-    try:
-        # If an event loop already exists, use it.
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = None
-    if loop and loop.is_running():
-        # Fallback to asyncio.run in a new thread – not needed for our tests.
-        return asyncio.run(coro)
-    else:
-        return asyncio.run(coro)
+    """
+    Execute an async coroutine to completion.
+
+    Both branches of the previous implementation called asyncio.run, while asyncio.get_event_loop()
+    only emitted a DeprecationWarning under pytest-asyncio, so the call is gone. asyncio.run owns its
+    own loop, which is what keeps this suite safe on Windows.
+    """
+    return asyncio.run(coro)
 
 # ---------------------------------------------------------------------------
 # Test cases
