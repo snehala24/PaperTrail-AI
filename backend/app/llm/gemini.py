@@ -116,7 +116,7 @@ class GeminiProvider(LLMProvider):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         timeout: Optional[float] = None,
-        max_retries: int = 3,
+        max_retries: int = 1,
         initial_delay: float = 1.0,
         max_delay: float = 10.0,
         backoff_factor: float = 2.0,
@@ -126,7 +126,7 @@ class GeminiProvider(LLMProvider):
         resolved_timeout = (
             timeout
             if timeout is not None
-            else getattr(settings, "gemini_timeout", 45.0)
+            else getattr(settings, "gemini_timeout", 25.0)
         )
         if resolved_timeout <= 0:
             raise ValueError("timeout must be positive")

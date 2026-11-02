@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * PaperTrail AI design tokens.
+ * A restrained, document-first palette: cool neutral canvas, ink typography,
+ * and a single indigo accent reserved for interactive and verified states.
+ */
+:root {
+  --foreground-rgb: 16, 24, 40;
+  --background-rgb: 246, 247, 249;
+
+  --pt-canvas: #f6f7f9;
+  --pt-surface: #ffffff;
+  --pt-border: #e4e7ec;
+  --pt-border-strong: #d0d5dd;
+  --pt-ink: #101828;
+  --pt-ink-muted: #667085;
+  --pt-accent: #3457d5;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    color: rgb(var(--foreground-rgb));
+    background: rgb(var(--background-rgb));
+    font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Every focusable control gets the same visible, on-brand ring. */
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--pt-accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::selection {
+    background: #dfe8ff;
+    color: #101828;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.011em;
+  }
+}
+
+@layer components {
+  /* Card shell used by every panel in the workspace. */
+  .pt-card {
+    @apply bg-white rounded-xl border border-ink-200 shadow-card;
+  }
+
+  /* Small uppercase eyebrow label above a section. */
+  .pt-eyebrow {
+    @apply text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-500;
+  }
+
+  .pt-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold border;
+  }
+
+  /* Primary / secondary buttons — consistent height, weight and motion. */
+  .pt-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors duration-150 hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400;
+  }
+
+  .pt-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-2 text-xs font-semibold text-ink-700 border border-ink-200 shadow-2xs transition-colors duration-150 hover:bg-ink-100 hover:text-ink-900 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .pt-btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition-colors duration-150 hover:bg-ink-100 hover:text-ink-900;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

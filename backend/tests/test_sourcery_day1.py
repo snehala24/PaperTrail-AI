@@ -77,21 +77,66 @@ def test_page_level_extraction_error_continues():
     assert any(c.page == 1 for c in chunks)
 
 
-def test_image_blocks_warning():
-    """A7: If a page has image blocks, add ONE summarised warning per document."""
-    pdf = fitz.open()
-    p1 = pdf.new_page()
-    p1.insert_text((50, 100), "Page 1 Text")
+def _figure_page(pdf: "fitz.Document", body_text: str):
+    """A page with a real paragraph and an embedded raster figure."""
+    page = pdf.new_page()
+    page.insert_textbox(fitz.Rect(50, 60, 550, 240), body_text)
     pix = fitz.Pixmap(fitz.csRGB, (0, 0, 10, 10), 0)
     pix.clear_with(255)
-    p1.insert_image(fitz.Rect(50, 200, 100, 250), pixmap=pix)
+    page.insert_image(fitz.Rect(50, 300, 100, 350), pixmap=pix)
+    return page
+
+
+def _image_only_page(pdf: "fitz.Document"):
+    page = pdf.new_page()
+    pix = fitz.Pixmap(fitz.csRGB, (0, 0, 10, 10), 0)
+    pix.clear_with(255)
+    page.insert_image(fitz.Rect(50, 100, 200, 250), pixmap=pix)
+    return page
+
+
+FIGURE_BODY_TEXT = (
+    "Attention weights were visualized across layers to show that the Kronecker "
+    "approximation concentrates mass on a small number of singular directions, "
+    "which is why the regularized decomposition stays stable during training."
+)
+
+
+def test_image_blocks_warning():
+    """A7: Graphics gaps are reported once per document and never overstate what was lost."""
+    pdf = fitz.open()
+    _figure_page(pdf, FIGURE_BODY_TEXT)
     pdf_bytes = pdf.write()
     pdf.close()
 
-    parsed_doc, _ = parse_pdf_bytes(pdf_bytes, "test_images.pdf")
-    img_warnings = [w for w in parsed_doc.extraction_warnings if "contain image blocks" in w]
+    parsed_doc, chunks = parse_pdf_bytes(pdf_bytes, "test_images.pdf")
+    img_warnings = [w for w in parsed_doc.extraction_warnings if "figure graphics" in w]
     assert len(img_warnings) == 1
-    assert "1 pages contain image blocks that were not extracted: pages 1" in img_warnings[0]
+    assert "1 page(s) contain figure graphics that are not read as data" in img_warnings[0]
+    assert "captions and surrounding text on those pages were indexed: pages 1" in img_warnings[0]
+    # The text on that page really was indexed, so the warning must not claim it was dropped.
+    assert "not extracted" not in img_warnings[0]
+    assert any(c.page == 1 and "Attention weights" in c.text for c in chunks)
+
+
+def test_image_only_page_is_not_reported_as_having_indexed_text():
+    """A7b: A page whose only content is a figure gets the no-text warning, not the caption one."""
+    pdf = fitz.open()
+    _figure_page(pdf, FIGURE_BODY_TEXT)
+    _image_only_page(pdf)
+    pdf_bytes = pdf.write()
+    pdf.close()
+
+    parsed_doc, chunks = parse_pdf_bytes(pdf_bytes, "test_image_only.pdf")
+
+    assert any(
+        w.startswith("Page 2 has no extractable text") for w in parsed_doc.extraction_warnings
+    )
+    graphics_warning = [w for w in parsed_doc.extraction_warnings if "figure graphics" in w]
+    assert len(graphics_warning) == 1
+    assert "pages 1." in graphics_warning[0]
+    assert "2" not in graphics_warning[0].split("pages")[1]
+    assert not any(c.page == 2 for c in chunks)
 
 
 def test_title_extraction_largest_font_top_35_percent():

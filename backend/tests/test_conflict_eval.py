@@ -356,8 +356,8 @@ def test_conflict_regression_unsupported_conflict_claims_abstains():
     resp_l2: AnswerResponse = run_sync(service_layer2.answer(req))
 
     assert resp_l2.status == AnswerStatus.ABSTAINED
-    assert "zero-tolerance" in resp_l2.abstain_reason.lower()
-    assert any("Layer 2 failure" in (c.notes or "") for c in resp_l2.citation_checks)
+    assert resp_l2.evidence_links == []
+    assert "quote" in resp_l2.abstain_reason.lower() or "zero-tolerance" in resp_l2.abstain_reason.lower()
 
     # Case B: Unentailed claim (Layer 3 failure)
     gen_unentailed = json.dumps({

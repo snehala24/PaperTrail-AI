@@ -1030,7 +1030,7 @@ def test_settings_gemini_defaults_and_validation():
     s = Settings()
     assert s.gemini_max_output_tokens == 2048
     assert s.gemini_thinking_level == "minimal"
-    assert s.gemini_timeout == 45.0
+    assert s.gemini_timeout == 25.0
 
     # Custom valid values
     s_custom = Settings(gemini_max_output_tokens=4096, gemini_thinking_level="low", gemini_timeout=60.0)
@@ -1136,13 +1136,13 @@ def test_gemini_provider_passes_response_format_to_sdk():
     assert kwargs["response_format"] == test_rf
 
 def test_gemini_provider_defaults_to_settings_timeout():
-    """GeminiProvider defaults to settings.gemini_timeout (45.0s) and passes it to SDK interactions.create."""
+    """GeminiProvider defaults to settings.gemini_timeout (25.0s) and passes it to SDK interactions.create."""
     mock_interaction = make_mock_interaction(output_text="Test timeout default")
     mock_client = make_mock_client(return_value=mock_interaction)
     provider = GeminiProvider(api_key="test-key", model="gemini-3.6-flash", client=mock_client)
-    assert provider.timeout == 45.0
+    assert provider.timeout == 25.0
     run_sync(provider.generate([LLMMessage(role="user", content="Hi")]))
-    assert mock_client.aio.interactions.create.call_args.kwargs["timeout"] == 45.0
+    assert mock_client.aio.interactions.create.call_args.kwargs["timeout"] == 25.0
 
 
 def test_gemini_provider_outer_grace_timeout_descriptive_message():
@@ -1487,3 +1487,73 @@ def test_unrelated_error_with_hours_never_misclassified_as_daily_quota():
 
     err = RuntimeError("The batch job has been running for 3 hours.")
     assert is_daily_quota_exhausted(err) is False
+
+
+def test_gemini_timeout_config_default_is_25():
+    """
+    When GEMINI_TIMEOUT is unset in the environment, Settings defaults gemini_timeout to 25.0s.
+    Executed in an isolated subprocess to prevent module-reload desynchronization in test suites.
+    """
+    import os
+    import subprocess
+    import sys
+
+    clean_env = os.environ.copy()
+    clean_env.pop("GEMINI_TIMEOUT", None)
+
+    code = "from backend.app.core.config import settings; assert settings.gemini_timeout == 25.0, f'Expected 25.0, got {settings.gemini_timeout}'"
+    res = subprocess.run(
+        [sys.executable, "-c", code],
+        env=clean_env,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, f"Subprocess failed (exit {res.returncode}): {res.stderr}"
+
+
+def test_gemini_provider_default_retries_is_one():
+    """
+    GeminiProvider default constructor must set max_retries=1 (2 total attempts).
+    """
+    mock_client = make_mock_client()
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+    )
+    assert provider.max_retries == 1
+
+
+def test_gemini_provider_makes_exactly_two_attempts_with_default_retries():
+    """
+    Under the default retry policy (max_retries=1), a persistent retryable error (503)
+    must produce exactly 2 attempts (1 initial + 1 retry) and then fail.
+    """
+    import httpx
+    from google.genai._gaos.lib import compat_errors
+
+    req = httpx.Request("POST", "http://test")
+    resp_503 = httpx.Response(503, request=req)
+    err_503 = compat_errors.InternalServerError(
+        "503 Service Unavailable",
+        response=resp_503,
+        body={},
+    )
+
+    mock_client = make_mock_client()
+    mock_client.aio.interactions.create = AsyncMock(side_effect=err_503)
+
+    # Use default max_retries (1), with tiny delay for instantaneous test execution
+    provider = GeminiProvider(
+        api_key="test-api-key",
+        model="gemini-3.6-flash",
+        client=mock_client,
+        initial_delay=0.001,
+        max_delay=0.005,
+    )
+
+    with pytest.raises(compat_errors.InternalServerError):
+        run_sync(provider.generate([LLMMessage(role="user", content="Test default 2 attempts")]))
+
+    # 1 initial attempt + 1 retry = exactly 2 total attempts
+    assert mock_client.aio.interactions.create.await_count == 2

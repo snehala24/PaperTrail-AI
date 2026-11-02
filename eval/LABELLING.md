@@ -2,16 +2,34 @@
 
 ## 1. Provenance Notice & Status
 > [!WARNING]
-> **AI-Generated Draft Benchmark (Not Hand-Labelled)**  
-> All 10 benchmark queries and associated evidence spans currently recorded in `eval/questions.jsonl` and `eval/gold_evidence.jsonl` were produced as **AI drafts** (`status: "ai_draft"`, `labelled_by: "assistant"`). They have **NOT** been verified by a human expert.
+> **Draft Benchmark (Not Human-Verified)**  
+> Every item in `eval/questions.jsonl` and `eval/gold_evidence.jsonl` is a **draft**, not verified ground truth. None carries `status: "human_verified"`.
+
+| File | Items | `human_draft` (labelled_by `snehala24`) | `ai_draft` (labelled_by `assistant`) | `human_verified` |
+| --- | :---: | :---: | :---: | :---: |
+| `eval/questions.jsonl` | 30 | 20 | 10 | 0 |
+| `eval/gold_evidence.jsonl` | 34 | 24 | 10 | 0 |
+
+Researcher-drafted items were written by the project owner from the papers, but "written by a human" is not the same as "signed off against the PDF page by page" — that is what `human_verified` means here, and it has not happened for any item yet.
 
 These benchmark items serve as a pipeline validation and smoke-test suite for retrieval evaluation. They must not be cited as an authoritative human-annotated benchmark until the protocol below is completed.
+
+### Reviewing the dataset
+
+`backend/app/eval/review_worksheet.py` renders one checklist per gold item, pre-resolved against the corpus actually stored in `data/`:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.eval.review_worksheet          # writes eval/review_worksheet.md
+.\.venv\Scripts\python.exe -m backend.app.eval.review_worksheet --check   # audits label integrity only
+```
+
+The generated `eval/review_worksheet.md` is an output, not the dataset. Marking a checkbox there does not change any label; the verdict still has to be written back into `eval/gold_evidence.jsonl` by hand.
 
 ---
 
 ## 2. Review Protocol for Human Verification
 
-To graduate an annotation from `ai_draft` to `human_verified`:
+To graduate an annotation from `human_draft` / `ai_draft` to `human_verified`:
 
 1. **Query Clarity & Realism**:
    - Verify that the query in `eval/questions.jsonl` represents a genuine research question that a literature researcher would formulate.

@@ -234,6 +234,7 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
     current_section = None
     in_references = False
     image_pages: Set[int] = set()
+    textless_pages: Set[int] = set()
 
     for page_idx in range(page_count):
         page_num = page_idx + 1
@@ -266,6 +267,7 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
                     dehyphed = dehyphenate(plain_text, doc_tokens_lower=doc_tokens_lower)
                     text_blocks = [dehyphed]
                 else:
+                    textless_pages.add(page_num)
                     extraction_warnings.append(
                         f"Page {page_num} has no extractable text; may be blank, scanned, or image-only."
                     )
@@ -284,11 +286,15 @@ def parse_pdf_bytes(pdf_bytes: bytes, filename: str) -> Tuple[Document, List[Chu
             continue
 
     if image_pages:
-        sorted_pages = sorted(image_pages)
-        page_str = ", ".join(str(p) for p in sorted_pages)
-        extraction_warnings.append(
-            f"{len(image_pages)} pages contain image blocks that were not extracted: pages {page_str}."
-        )
+        # Graphics are never interpreted, but the text on those same pages usually is.
+        # Say precisely which is which so the diagnostic cannot overstate the gap.
+        graphics_pages_with_text = sorted(image_pages - textless_pages)
+        if graphics_pages_with_text:
+            page_str = ", ".join(str(p) for p in graphics_pages_with_text)
+            extraction_warnings.append(
+                f"{len(graphics_pages_with_text)} page(s) contain figure graphics that are not "
+                f"read as data; captions and surrounding text on those pages were indexed: pages {page_str}."
+            )
 
     pdf_doc.close()
 
