@@ -6,7 +6,7 @@ Evaluates the five apparent_conflict benchmark questions from eval/questions.jso
 - Q-006 (KFAC-SVD vs SVD-LLM under uniform vs LEMS allocation; p.7)
 - Q-015 (GPU used: H200 for main experiments vs A100 for inference speed; p.6, p.26)
 - Q-017 (KL divergence vs MSE calibration metric; p.8)
-- Q-030 (Cross-paper: LEMS claim of GFWSVD degradation vs GFWSVD paper; pending second paper)
+- Q-030 (Cross-paper: LEMS claim of GFWSVD degradation vs GFWSVD paper; not evaluable offline — see the block reason)
 
 Evaluates three orthogonal dimensions:
 1. Retrieval Success: Are the required gold chunks retrieved in top-k?
@@ -304,7 +304,7 @@ def run_conflicts_eval(
     """
     Execute repeatable offline apparent-conflict benchmark evaluation.
     - Loads all 5 apparent_conflict questions.
-    - Flags Q-030 (pending second paper) as BLOCKED_PENDING_SECOND_PAPER.
+    - Flags Q-030 as BLOCKED (no scripted offline response for a cross-paper conflict; it is not counted as a pass or a failure).
     - Evaluates retrieval, 3-layer verification, and conflict detection on evaluable questions.
     - Generates sanitized benchmark artifact.
     """
@@ -334,14 +334,19 @@ def run_conflicts_eval(
         golds = gold_by_q.get(qid, [])
 
         # Check multi-paper prerequisite / cross-paper isolation
-        is_blocked = (
+        missing_second_paper = (
             q.status == BenchmarkStatus.PENDING_SECOND_PAPER
             or "doc_gfwsvd_placeholder" in q.target_doc_ids
             or any("TODO" in g.doc_sha256 or (g.answer_span and g.answer_span.startswith("TODO")) for g in golds)
-            or q.question_id == "Q-030"
         )
+        # Q-030's corpus prerequisite is now satisfied — GFWSVD is indexed and both of its gold spans
+        # resolve against stored chunks — but this runner is deterministic and offline: it answers each
+        # question through a scripted MockLLMProvider response, and no scripted response exists for a
+        # two-paper conflict. Fabricating one would score the runner, not the product, so the question
+        # stays out of the denominator and is covered by live validation instead.
+        no_scripted_response = qid == "Q-030"
 
-        if is_blocked:
+        if missing_second_paper or no_scripted_response:
             blocked_count += 1
             results_per_question.append({
                 "question_id": qid,
@@ -349,7 +354,13 @@ def run_conflicts_eval(
                 "question_type": "apparent_conflict",
                 "status": "BLOCKED_PENDING_SECOND_PAPER",
                 "evaluable": False,
-                "block_reason": "Cross-paper question requires second paper (GFWSVD / TODO_GFWSVD_SHA256) which is not yet ingested into corpus.",
+                "block_reason": (
+                    "Cross-paper question requires a second paper (GFWSVD / TODO_GFWSVD_SHA256) that is not yet ingested into the corpus."
+                    if missing_second_paper
+                    else "Both papers are indexed and both gold spans verify against stored chunks, but this offline runner has no "
+                         "scripted deterministic response for a cross-paper conflict; the case is covered by live end-to-end validation "
+                         "rather than counted as a pass here."
+                ),
                 "target_doc_ids": q.target_doc_ids,
                 "retrieval_success": None,
                 "citation_verification_success": None,
@@ -517,7 +528,7 @@ def print_conflict_results_table(record: Dict[str, Any]):
     print("=" * 90)
     print(f"  Total Apparent-Conflict Questions : {s['total_conflict_questions']}")
     print(f"  Evaluated (Single-Paper Corpus)  : {s['evaluated_questions']}")
-    print(f"  Blocked (Pending Second Paper)   : {s['blocked_pending_second_paper']} (Q-030)")
+    print(f"  Blocked (not evaluable offline)  : {s['blocked_pending_second_paper']} (Q-030 — see block_reason)")
     print(f"  Retrieval Success Rate           : {s['retrieval_success_count']}/{s['evaluated_questions']} ({s['retrieval_success_rate'] * 100:.1f}%)")
     print(f"  Citation Verification Rate       : {s['citation_verification_success_count']}/{s['evaluated_questions']} ({s['citation_verification_success_rate'] * 100:.1f}%)")
     print(f"  Conflict Detection Correctness   : {s['conflict_detection_success_count']}/{s['evaluated_questions']} ({s['conflict_detection_success_rate'] * 100:.1f}%)")

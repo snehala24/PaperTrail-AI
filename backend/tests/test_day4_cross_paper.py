@@ -2872,7 +2872,86 @@ def test_conflict_citing_never_retrieved_chunk_is_dropped():
 def test_conflict_between_two_retrieved_chunks_is_still_surfaced():
     """
     Positive control for the grounding filter: when both sides of a reported conflict were retrieved
-    as evidence, the Day 3 disagreement contract still holds and a comparison is produced.
+    as evidence AND each side backs a verified claim, the Day 3 disagreement contract still holds,
+    a structured comparison is produced, and both of its claim ids resolve to real ledger claims.
+    """
+    doc_gfw = "doc_7fdb1200e823"
+    doc_lems = "doc_c67573ef50cc"
+
+    chunk_gfw = make_scored_chunk(
+        chunk_id="doc_7fdb1200e823_p5_c5",
+        doc_id=doc_gfw,
+        page=5,
+        text="Given a calibration dataset D, the per-sample gradients are computed.",
+    )
+    chunk_lems = make_scored_chunk(
+        chunk_id="doc_c67573ef50cc_p3_c5",
+        doc_id=doc_lems,
+        page=3,
+        text="we estimate Kronecker factors from token-wise second moments.",
+    )
+    retriever = MockRetriever([chunk_gfw, chunk_lems])
+
+    gen_json = json.dumps({
+        "answer": (
+            "GFWSVD computes per-sample gradients given a calibration dataset, "
+            "while LEMS estimates Kronecker factors from token-wise second moments."
+        ),
+        "claims": [
+            {
+                "claim_id": "claim_1",
+                "text": "GFWSVD computes per-sample gradients given a calibration dataset.",
+                "chunk_ids": ["doc_7fdb1200e823_p5_c5"],
+                "quote": "Given a calibration dataset D, the per-sample gradients are computed.",
+            },
+            {
+                "claim_id": "claim_2",
+                "text": "LEMS estimates Kronecker factors from token-wise second moments.",
+                "chunk_ids": ["doc_c67573ef50cc_p3_c5"],
+                "quote": "we estimate Kronecker factors from token-wise second moments.",
+            },
+        ],
+        "abstained": False,
+        "abstain_reason": None,
+        "conflicts": [
+            {
+                "chunk_id_a": "doc_7fdb1200e823_p5_c5",
+                "chunk_id_b": "doc_c67573ef50cc_p3_c5",
+                "conflict_type": "apparent_conflict",
+                "conflict_reason": "Gradient-based versus second-moment estimation of the same factors.",
+            }
+        ],
+        "comparisons": [],
+    })
+
+    llm = MockLLMProvider([
+        gen_json,
+        json.dumps({"supported": True, "rationale": "Exact primary grounding for GFWSVD."}),
+        json.dumps({"supported": True, "rationale": "Exact primary grounding for LEMS."}),
+    ])
+    verifier = CitationVerifier(llm_provider=llm)
+    service = AnswerService(retriever=retriever, llm_provider=llm, verifier=verifier)
+
+    resp = run_sync(service.answer(AnswerRequest(question="How is Fisher information estimated?")))
+
+    assert resp.status == AnswerStatus.ANSWERED
+    assert len(resp.comparisons) == 1
+    comp = resp.comparisons[0]
+    assert comp.comparison_type == ComparisonType.APPARENT_CONFLICT
+    assert comp.conflict_reason
+    assert "sources disagree" in resp.answer.lower()
+    # Every claim id referenced by a ledger comparison must exist in the ledger.
+    ledger_claim_ids = {link.claim_id for link in resp.evidence_links}
+    assert comp.claim_id_a in ledger_claim_ids
+    assert comp.claim_id_b in ledger_claim_ids
+
+
+def test_conflict_with_one_uncited_side_is_noted_but_not_promoted_to_a_comparison():
+    """
+    A conflict may only name chunks that were retrieved (Day 3 rule), but a structured comparison also
+    needs both sides to back a verified claim. When the generator flags a conflict against a chunk that
+    no verified claim actually cites, the answer still records the disagreement and the ledger stays free
+    of a comparison whose claim id would resolve to a claim that does not exist.
     """
     doc_gfw = "doc_7fdb1200e823"
     doc_lems = "doc_c67573ef50cc"
@@ -2924,8 +3003,9 @@ def test_conflict_between_two_retrieved_chunks_is_still_surfaced():
     resp = run_sync(service.answer(AnswerRequest(question="How is Fisher information estimated?")))
 
     assert resp.status == AnswerStatus.ANSWERED
-    assert len(resp.comparisons) == 1
-    comp = resp.comparisons[0]
-    assert comp.comparison_type == ComparisonType.APPARENT_CONFLICT
-    assert comp.conflict_reason
+    # The disagreement is still surfaced to the reader, named by real retrieved chunk ids.
     assert "sources disagree" in resp.answer.lower()
+    assert "doc_c67573ef50cc_p3_c5" in resp.answer
+    # But no structured claim of an apparent conflict enters the ledger on one verified side alone.
+    assert resp.comparisons == []
+

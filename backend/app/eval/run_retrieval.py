@@ -207,10 +207,8 @@ def run_retrieval_eval() -> Dict[str, Any]:
     failure_analysis: List[Dict[str, Any]] = []
 
     for q in questions:
-        # Exclude unanswerables and cross-paper pending items from evaluation
+        # Exclude unanswerables and cross-paper items that still lack a second-paper label.
         if q.question_type == "unanswerable" or q.status == BenchmarkStatus.PENDING_SECOND_PAPER:
-            continue
-        if q.question_id in ("Q-029", "Q-030"):
             continue
 
         g_items = gold_by_q.get(q.question_id, [])
@@ -302,7 +300,6 @@ def run_retrieval_eval() -> Dict[str, Any]:
         q for q in questions
         if (q.labelled_by != "assistant" or q.status in (BenchmarkStatus.HUMAN_DRAFT, BenchmarkStatus.HUMAN_VERIFIED, BenchmarkStatus.VERIFIED))
         and q.status != BenchmarkStatus.PENDING_SECOND_PAPER
-        and q.question_id not in ("Q-029", "Q-030")
     ]
     ai_questions = [
         q for q in questions

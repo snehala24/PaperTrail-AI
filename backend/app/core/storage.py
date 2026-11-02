@@ -1,7 +1,10 @@
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from backend.app.schemas import Document, Chunk
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentStorage:
@@ -28,7 +31,11 @@ class DocumentStorage:
             try:
                 with open(self.index_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except Exception:
+            except Exception as exc:
+                # Loading still degrades to "nothing ingested yet", but the operator has to be able to
+                # tell a genuinely empty corpus from a corrupt index file: silently losing it makes every
+                # later upload look new, which is how a corpus gets re-ingested without anyone noticing.
+                logger.warning("SHA-256 dedup index at %s is unreadable (%s); starting with an empty index.", self.index_file, exc)
                 return {}
         return {}
 
@@ -68,7 +75,8 @@ class DocumentStorage:
             try:
                 with open(file, "r", encoding="utf-8") as f:
                     docs.append(Document(**json.load(f)))
-            except Exception:
+            except Exception as exc:
+                logger.warning("Skipping unreadable document record %s: %s", file, exc)
                 continue
         return docs
 
@@ -80,7 +88,8 @@ class DocumentStorage:
                 with open(file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     all_chunks.extend(Chunk(**c) for c in data)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Skipping unreadable chunk file %s: %s", file, exc)
                 continue
         return all_chunks
 

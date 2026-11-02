@@ -78,3 +78,41 @@ def test_list_documents(temp_storage):
     assert len(all_docs) == 2
     ids = {d.doc_id for d in all_docs}
     assert ids == {"doc-1", "doc-2"}
+
+
+def test_unreadable_records_are_skipped_but_named_in_the_log(temp_storage, caplog):
+    """
+    A damaged JSON record must not take the whole workspace down, but it also must not disappear
+    quietly: without a log line an operator cannot tell a smaller corpus from a broken one.
+    """
+    good = Document(doc_id="doc-good", title="Good", filename="good.pdf", sha256="a" * 64, page_count=1)
+    temp_storage.save_document(good, [
+        Chunk(chunk_id="doc-good_p1_c1", doc_id="doc-good", page=1, text="Usable text", kind=ChunkKind.TEXT)
+    ])
+
+    (temp_storage.docs_dir / "doc-broken.json").write_text("{ this is not json", encoding="utf-8")
+    (temp_storage.chunks_dir / "doc_broken_chunks.json").write_text("{ this is not json", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="backend.app.core.storage"):
+        docs = temp_storage.list_documents()
+        chunks = temp_storage.get_all_chunks()
+
+    assert [d.doc_id for d in docs] == ["doc-good"]
+    assert [c.chunk_id for c in chunks] == ["doc-good_p1_c1"]
+
+    warning_text = " ".join(r.getMessage() for r in caplog.records)
+    assert "doc-broken.json" in warning_text
+    assert "doc_broken_chunks.json" in warning_text
+
+
+def test_corrupt_dedup_index_is_reported_instead_of_silently_emptied(tmp_path, caplog):
+    """
+    Losing the SHA-256 index without a trace makes every future upload look new, so the load has to say so.
+    """
+    (tmp_path / "sha256_index.json").write_text("not json at all", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="backend.app.core.storage"):
+        storage = DocumentStorage(base_dir=tmp_path)
+
+    assert storage._sha256_map == {}
+    assert "SHA-256 dedup index" in caplog.text

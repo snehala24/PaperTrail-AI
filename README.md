@@ -172,29 +172,44 @@ Chunk composition: 278 text passages, 13 tables, 27 figure references, 91 refere
 
 **No gold annotation has been checked against a PDF and signed off yet.** Every accuracy figure below is therefore a *pipeline-validation* measurement against draft labels — it shows the retrieval and verification stack behaves sensibly, not that it matches expert ground truth. `eval/LABELLING.md` is the protocol; `backend/app/eval/review_worksheet.py` generates `eval/review_worksheet.md`, one checklist per gold span, pre-resolved against the stored corpus.
 
-### Retrieval results
+### Retrieval results — current corpus (5 papers, 409 chunks)
 
-Run [`eval/runs/run_20261029_073045.json`](eval/runs/run_20261029_073045.json) (commit `80e9363`), measured on the 209-chunk two-paper corpus that existed at the time, 30 questions, of which 28 were in scope and 23 answerable (5 unanswerable reserved for abstention testing).
+Run [`eval/runs/run_20261102_132940.json`](eval/runs/run_20261102_132940.json) (commit `b46396b`), measured against the corpus the workspace indexes today: 5 papers, 117 pages, 409 chunks. Of the 30 questions, 25 are answerable and 5 are reserved for abstention testing, so n = 25 per configuration. Candidate pool 30, no human-verified gold (see the provenance table above — these are pipeline-validation figures against draft labels).
+
+| Configuration | Recall@1 | Recall@5 | Recall@10 | MRR | nDCG@5 |
+| --- | --- | --- | --- | --- | --- |
+| BM25 only | 0.3400 | 0.6800 | 0.7600 | 0.5615 | 0.5215 |
+| Dense only | 0.4000 | 0.5800 | 0.6800 | 0.5364 | 0.4756 |
+| Hybrid + RRF | 0.4000 | 0.6800 | 0.8200 | 0.5969 | 0.5401 |
+| **Hybrid + cross-encoder rerank** | **0.4600** | **0.8800** | **0.8800** | **0.6927** | **0.6718** |
+
+Hybrid + rerank carries Recall@5 = 0.8800 with a 95% bootstrap interval of [0.74, 0.98] and MRR [0.538, 0.827]. Split by who drafted the labels:
+
+| Subset | Answerable n | Best configuration | Recall@5 | MRR |
+| --- | :---: | --- | --- | --- |
+| Researcher-drafted (`human_draft`) | 17 | Hybrid + rerank | 0.8824 [0.7353, 1.0] | 0.7196 |
+| Assistant-drafted (`ai_draft`) | 8 | Hybrid + rerank | 0.8750 | 0.6354 |
+
+At n = 25 and n = 17 the intervals remain wide and the subsets are not statistically separable. Only one question misses Recall@5 under reranking (Q-021); lexical and dense-only configurations miss six and five respectively, which is what the reranker is buying. Full per-configuration failure lists, the corpus fingerprint and the reproduce commands are in [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md).
+
+### Retrieval results — historical (2-paper, 209-chunk corpus)
+
+Run [`eval/runs/run_20261029_073045.json`](eval/runs/run_20261029_073045.json) (commit `80e9363`), measured on the 209-chunk two-paper corpus that existed at the time: 30 questions, 28 in scope, 23 answerable.
 
 | Configuration | MRR | Recall@5 | nDCG@5 | Recall@10 |
 | --- | --- | --- | --- | --- |
 | BM25 only | 0.5976 | 0.7174 | 0.5549 | 0.8696 |
 | Dense only | 0.6266 | 0.6522 | 0.5604 | 0.7174 |
 | Hybrid + RRF | 0.7039 | 0.7174 | 0.6306 | 0.7391 |
-| **Hybrid + cross-encoder rerank** | 0.6827 | **0.8696** | **0.6715** | **0.9130** |
+| Hybrid + cross-encoder rerank | 0.6827 | 0.8696 | 0.6715 | 0.9130 |
 
-Split by who drafted the labels, the picture is honest rather than flattering:
-
-| Subset | Answerable n | Best configuration | MRR | Recall@5 |
-| --- | :---: | --- | --- | --- |
-| Researcher-drafted questions | 15 | Hybrid + rerank | 0.7005 | 0.8667 [0.667, 1.0] |
-| Assistant-drafted questions | 8 | Hybrid + RRF | 0.7958 | 0.8750 [0.625, 1.0] |
-
-Sample sizes are below 30, so the 95% bootstrap intervals are wide and the subsets are not statistically separable. The recorded failure analysis shows the pattern behind it: researcher questions are phrased the way people actually ask ("how long does the first run take once cached?"), which is harder for lexical search than paraphrases generated from the paper's own vocabulary.
+**These two tables are not a before/after comparison.** Between them the corpus grew from 2 papers/209 chunks to 5 papers/409 chunks, the evaluated set grew from 23 to 25 questions (two hardcoded exclusions of the cross-paper questions Q-029/Q-030 were removed), and the parser's title extraction changed. Treat the upper table as the current measurement and this one as the archived run it replaced.
 
 ### Apparent-conflict results
 
 Run [`eval/runs/run_20261029_072737_conflicts.json`](eval/runs/run_20261029_072737_conflicts.json): of 5 conflict questions, 4 were evaluable and 1 blocked pending a second paper. On those 4, retrieval, citation verification, and conflict detection each succeeded 4/4, with `overall_grounded_success_rate = 1.0`. This was measured before the verbatim-quote precheck and the both-sides-grounding filter were added, so it is a floor to improve on rather than a current score.
+
+That runner is fully offline and deterministic — each question is answered through a scripted `MockLLMProvider` response — so what it establishes is that the grounding pipeline honours a conflict that has been handed to it. It does not establish that the system *finds* contradictions. Its Q-005 case is labelled `real_contradiction`, but it is a hand-written single-paper pair, not a cross-paper contradiction discovered in the corpus. [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md) records the separate search for a genuine one: across all 409 chunks, 302 opposition-bearing sentences and 30 cross-document candidate pairs were mined and **none survived the criteria for a genuine contradiction**, so no verified positive case exists in this corpus and contradiction detection is unproven rather than demonstrated.
 
 ### Reproducing
 
@@ -214,12 +229,16 @@ Run [`eval/runs/run_20261029_072737_conflicts.json`](eval/runs/run_20261029_0727
 
 | Check | Result |
 | --- | --- |
-| Backend suite (`pytest backend/tests`) | **359 passed**, 1 pre-existing `DeprecationWarning`, 44.7 s |
+| Backend suite (`pytest backend/tests`) | **366 passed**, 0 failed, 0 skipped, 1 pre-existing `DeprecationWarning`, 78 s |
 | Frontend suite (`npm run test` — Vitest) | **155 passed** across 9 files |
 | Type check (`npm run typecheck`) | clean, exit 0 |
 | Production build (`npm run build`) | succeeds; route `/` 32.5 kB, First Load JS 120 kB |
-| Browser walkthrough of all five destinations | performed against a running backend, including document selection, loading, empty and no-match states, abstention, backend-error and upload validation; no console errors |
+| Gold-span integrity (`python -m backend.app.eval.verify_gold`) | 34/34 gold spans resolve inside their cited page's stored chunks; 25 answerable questions matched, 5 reserved unanswerable, 0 orphan questions, 0 unmatched gold |
+| Label integrity (`python -m backend.app.eval.review_worksheet --check`) | 34 gold annotations, 0 human-verified, 0 integrity errors |
+| Browser walkthrough of all five destinations | performed against a running backend, including chunk search, document selection, loading, empty and no-match states, abstention, backend-error and upload validation; no console errors |
 | Live end-to-end questions | performed for single-paper factual, multi-paper comparative, cross-paper conflict, and unanswerable prompts; see caveats below |
+
+Backend coverage grew from 359 to 366 tests during the 2026-11-02 hardening pass: two cross-paper conflict-ledger cases, four parser cases (figure-only warnings and title extraction) and two storage-resilience cases.
 
 The tests are offline — no test makes a live provider call, and negative tests assert that fake credentials never reach logs or responses. The six controlled live checks (single-paper, cross-paper, claimed contradiction, apparent conflict, abstention, and an independent quotation re-check) are recorded in [docs/validation-report.md](docs/validation-report.md).
 
@@ -229,12 +248,12 @@ The tests are offline — no test makes a live provider call, and negative tests
 
 - **Figure graphics are not read.** Vector plots and raster figures are not interpreted; their captions and surrounding text are indexed and searchable. A paper whose result only exists inside a plotted curve cannot be answered from it.
 - **Gold labels are unverified.** See the provenance table above; the accuracy numbers are pipeline validation, not human-graded accuracy.
-- **Small benchmark.** n < 30 answerable questions per subset, with correspondingly wide confidence intervals.
-- **Three indexed PDFs are not on disk.** Attention, LoRA and DoRA are indexed (chunks in `data/`) but their source files are not present locally, so human review of their gold spans needs the paper re-opened from arXiv; re-uploading the identical file is deduplicated by SHA-256 and only re-chunks if the chunker version has changed.
+- **Small benchmark.** n = 25 answerable questions overall, 17 in the researcher-drafted subset, with correspondingly wide confidence intervals.
+- **No genuine contradiction has been found in this corpus.** Mining all 409 indexed chunks produced 30 cross-document candidate pairs, none of which met the criteria for a genuine contradiction ([docs/benchmark-contradictions.md](docs/benchmark-contradictions.md)). The apparent-conflict and abstention behaviour is verified; contradiction *detection* is therefore unproven rather than demonstrated, and the five-paper corpus is too narrow a base to conclude anything about it.
 - **Live answers depend on a paid-tier provider for sustained use.** On a free tier, request caps will surface as explicit provider failures; the system abstains instead of answering unverified.
-- **Retrieval metrics predate the current corpus.** They were measured on 209 chunks (two papers); the indexed corpus is now 409 chunks across five, so re-running is required before quoting retrieval at the current scale.
 - **Research history is browser-local.** Saved runs live in `localStorage` on that machine and profile; there is no server-side history, sync, or export yet.
 - **Single-user JSON storage.** No authentication, no concurrency control, no queue; indexing runs synchronously inside the upload request.
+- **Stored titles predate the parser fix.** The five indexed records were created before page-1 title extraction was corrected, so the frontend still carries a small display override table (`frontend/src/lib/display.ts`) for them. Re-ingesting would refresh the stored metadata; it touches the corpus, so it has not been done.
 - **Methodological claims are heuristic.** Section-heading detection and table/figure classification are rules tuned on the papers in this corpus, not a general PDF-layout solution.
 
 ---
@@ -270,7 +289,8 @@ frontend/
   app/, src/components/, src/lib/    workspace UI and API client
   tests/                             155 component and logic tests
 eval/           questions, gold spans, labelling protocol, run artifacts
-docs/           architecture.md, decisions.md (ADRs), limitations.md
+docs/           architecture.md, decisions.md (ADRs), limitations.md,
+                benchmark-retrieval.md, benchmark-contradictions.md
 data/           indexed documents and chunks (gitignored)
 ```
 
@@ -278,4 +298,4 @@ data/           indexed documents and chunks (gitignored)
 
 Contracts before implementations; unsupported claims flagged rather than dropped; contradictions documented with a reason rather than asserted; no Redis/Celery/Postgres until the MVP proves it needs them; and no number in this README that does not come from a run artifact in `eval/runs/` or a command output above.
 
-Further detail: [docs/architecture.md](docs/architecture.md), [docs/decisions.md](docs/decisions.md), [docs/limitations.md](docs/limitations.md), [eval/LABELLING.md](eval/LABELLING.md).
+Further detail: [docs/architecture.md](docs/architecture.md), [docs/decisions.md](docs/decisions.md), [docs/limitations.md](docs/limitations.md), [docs/benchmark-retrieval.md](docs/benchmark-retrieval.md), [docs/benchmark-contradictions.md](docs/benchmark-contradictions.md), [eval/LABELLING.md](eval/LABELLING.md).

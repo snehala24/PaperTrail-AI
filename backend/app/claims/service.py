@@ -1014,10 +1014,11 @@ class AnswerService:
                 logger.debug("Failed to parse ClaimComparison: %s", e)
 
         # Fallback 1: Ensure conflicts produce corresponding ClaimComparison if comparisons was not provided
-        # Grounding requirement: a conflict may only be reported when BOTH sides are chunks that were
-        # actually retrieved as evidence for this answer. A conflict citing a chunk that was never
-        # retrieved (an invented or out-of-context reference) is dropped rather than surfaced — the
-        # product must never assert a disagreement it cannot point to in the source evidence.
+        # Grounding requirement (two levels, deliberately different):
+        #  * The answer-level "sources disagree" note keeps the Day 3 contract: it may only name chunks
+        #    that were actually retrieved as evidence for this question, never an invented reference.
+        #  * A structured ClaimComparison additionally requires BOTH sides to back a verified claim, so
+        #    the ledger never shows a relationship pointing at a claim id that does not exist.
         all_conflicts = cleaned_data.get("conflicts", [])
         retrieved_chunk_ids = {chunk.chunk_id for chunk in retrieved_results}
         conflicts = [
@@ -1026,6 +1027,7 @@ class AnswerService:
             if conf.get("chunk_id_a") in retrieved_chunk_ids
             and conf.get("chunk_id_b") in retrieved_chunk_ids
         ]
+        verified_evidence_chunk_ids = {link.chunk_id for link in evidence_links}
         if conflicts and not comparisons:
             for conf in conflicts:
                 chunk_a = conf.get("chunk_id_a")
@@ -1047,20 +1049,23 @@ class AnswerService:
                 )
                 if c_type in (ComparisonType.APPARENT_CONFLICT, ComparisonType.CONTRADICTS) and not c_reason:
                     c_type = ComparisonType.UNRESOLVED
+                # Second grounding level: a comparison is only emitted when BOTH sides back a verified
+                # claim. A retrieved-but-uncited chunk still earns the answer-level disagreement note above,
+                # but inventing a ClaimComparison whose claim_id resolves to no claim would corrupt the ledger.
+                if chunk_a not in verified_evidence_chunk_ids or chunk_b not in verified_evidence_chunk_ids:
+                    continue
                 link_a_match = next((l for l in evidence_links if l.chunk_id == chunk_a), None)
                 link_b_match = next((l for l in evidence_links if l.chunk_id == chunk_b), None)
-                # Both chunk ids are guaranteed to be retrieved evidence by the filter above.
-                # Reference the grounded claim when one exists, otherwise the retrieved chunk itself.
-                ref_a = link_a_match.claim_id if link_a_match else chunk_a
-                ref_b = link_b_match.claim_id if link_b_match else chunk_b
+                if link_a_match is None or link_b_match is None:  # unreachable guard; membership was just proven
+                    continue
                 summary_text = (
                     f"Sources disagree between chunk '{chunk_a}' and chunk '{chunk_b}'"
                     + (f": {c_reason}" if c_reason else ".")
                 )
                 comparisons.append(
                     ClaimComparison(
-                        claim_id_a=ref_a,
-                        claim_id_b=ref_b,
+                        claim_id_a=link_a_match.claim_id,
+                        claim_id_b=link_b_match.claim_id,
                         doc_id_a=doc_a,
                         doc_id_b=doc_b,
                         comparison_type=c_type,

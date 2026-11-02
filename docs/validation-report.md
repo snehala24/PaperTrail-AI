@@ -17,21 +17,24 @@ locally under `scratch/final_acceptance/` (gitignored) and are summarised below.
 
 ## Regression and browser verification
 
-- Backend suite: **359 passed**, 1 pre-existing `DeprecationWarning` (`backend/tests/test_exact_quote_validation.py:87`), 44.7 s.
-- Frontend suite: **155 passed** across 9 files; `tsc --noEmit` clean; `next build` succeeds.
-- Browser walkthrough: Dashboard, Research Library, Research Assistant, Evidence Ledger and
-  Cross-Paper Comparisons all rendered against the live backend, including document
-  selection, loading, empty and no-match states, abstention, backend-error handling,
-  upload validation (a non-PDF file was rejected client-side without any write request),
-  and research history surviving a page reload. No console errors.
-- Cross-Paper Comparisons was also inspected with a stored real backend response (Test 3)
-  to confirm both sides render their quoted evidence.
+- Backend suite: **366 passed**, 0 failed, 0 skipped, 1 pre-existing `DeprecationWarning` (`backend/tests/test_exact_quote_validation.py:87`), 78 s. The increase from 359 is seven tests added during the 2026-11-02 hardening pass: two cross-paper conflict-ledger cases, four parser cases (figure-only warnings, title extraction) and two storage-resilience cases.
+- Frontend suite: **155 passed** across 9 files; `tsc --noEmit` clean; `next build` succeeds (route `/` 32.5 kB, First Load JS 120 kB).
+- Evaluation integrity: `python -m backend.app.eval.verify_gold` resolves 34/34 gold spans inside their cited page's stored chunks, matches 25 answerable questions, keeps 5 reserved unanswerable, 0 orphan questions, 0 unmatched gold. `python -m backend.app.eval.review_worksheet --check` reports 34 annotations, 0 human-verified, 0 integrity errors.
+- Browser walkthrough: Dashboard, Research Library, Research Assistant, Evidence Explorer and Cross-Paper Analysis all rendered against the live backend, including chunk-explorer search (78 chunks → 2 for "intrinsic dimension" → 0 with a no-match message for a nonsense term → 78 when cleared), document selection, loading and backend-error states, abstention, upload validation (a non-PDF and a forged `%PDF-` file were both rejected with HTTP 400 and no write to `data/`), and research history surviving a page reload. No console errors.
+- Citation display was re-checked in the browser on a stored real answer: the single claim renders its page-26 verbatim quotation, chunk id and `verified` check, and the quotation was independently re-found in `data/chunks/doc_c67573ef50cc_chunks.json`. An abstained run was reopened in the same view and states "No verified evidence to display" with the failing citation named — mixed `verified`/`unverified` and `unsupported`/`unverified` check statuses are displayed as they are, never collapsed into a pass.
+- Provider-blocked live behaviour: a fresh question through the real UI returned an explicit `Backend Execution Error` naming the daily quota exhaustion, with zero evidence links and zero citation checks stored. The failed run appears in history as "Request failed" and does not clear or replace previously saved answers.
+- Populated cross-paper comparison rendering is covered by component tests (`frontend/tests/comparisons.test.tsx`: all four relationship labels, and an explicit case that `apparent_conflict` is never mislabelled `contradicts`). In the browser during this pass only the empty state and the relationship taxonomy were re-verified, because this profile holds no saved answer containing comparisons and generating one was provider-blocked.
 
 ## Not established by this round
 
 - Sustained live throughput on a paid provider tier.
 - Human-verified gold labels: 0 of 34, so the retrieval figures in `README.md` remain
   pipeline-validation numbers. See `eval/LABELLING.md`.
-- Retrieval metrics at the current 409-chunk corpus scale; the recorded run measured 209
-  chunks across two papers.
+- Genuine contradiction detection: no defensible cross-paper contradiction exists in the indexed
+  five-paper corpus, so the positive case remains untested. See
+  [benchmark-contradictions.md](benchmark-contradictions.md).
 - Reading the content of figures: figure graphics remain uninterpreted.
+
+Retrieval at the current corpus scale is now measured — 5 papers / 409 chunks, $n=25$, hybrid
+rerank Recall@5 0.8800 and MRR 0.6927 (`eval/runs/run_20261102_132940.json`); see
+[benchmark-retrieval.md](benchmark-retrieval.md) for the current-versus-historical separation.
