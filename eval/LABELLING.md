@@ -25,6 +25,8 @@ These benchmark items serve as a pipeline validation and smoke-test suite for re
 
 The generated `eval/review_worksheet.md` is an output, not the dataset. Marking a checkbox there does not change any label; the verdict still has to be written back into `eval/gold_evidence.jsonl` by hand.
 
+Protocol `1.1` additionally classifies how each recorded span relates to the stored text — `exact`, `case only`, `hyphen or space repair`, `other page`, `absent`, `no document` — and prints a caution on every item where a careless tick would do damage (short spans, `contradicts` labels, duplicate spans, cross-paper items, conflict-typed questions whose spans are labelled `supports`). The current run reports 33 `exact` and 1 `case only`, with 15 of 34 items carrying at least one caution. The reviewer-facing instructions live in [HUMAN-REVIEW-GUIDE.md](HUMAN-REVIEW-GUIDE.md).
+
 ---
 
 ## 2. Review Protocol for Human Verification
@@ -43,7 +45,8 @@ To graduate an annotation from `human_draft` / `ai_draft` to `human_verified`:
 
 3. **Relation & Apparent Conflict Classification**:
    - For `supports`, verify that the cited span logically entails or provides direct empirical evidence for the query answer.
-   - For `apparent_conflict` / `contradicts`, verify that the underlying evidence reflects an experimental divergence (e.g. different quantization regimes, uniform vs. non-uniform allocation) and that `conflict_reason` explains the causal divergence.
+   - For a conflict-bearing relation, verify that the underlying evidence reflects an experimental divergence (e.g. different quantization regimes, uniform vs. non-uniform allocation) and that the conflict_reason field explains the causal divergence.
+   - Schema caveat: the relation enum has no apparent_conflict member, so an apparent conflict is recorded as contradicts or weakens plus a reason. Review the label and the reason together; if the reason names a condition difference, the label itself is what needs deciding. Both contradicts items in the current dataset are in exactly that state, which the worksheet flags.
 
 4. **Graduation to Verified Status**:
    - Update `status` in `eval/questions.jsonl` and `eval/gold_evidence.jsonl` to `"human_verified"`.

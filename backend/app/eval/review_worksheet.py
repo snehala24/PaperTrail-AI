@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from datetime import date
@@ -31,9 +32,10 @@ from backend.app.schemas.eval import (
     BenchmarkStatus,
     GoldEvidence,
     is_chunk_match,
+    normalize_text_span,
 )
 
-REVIEW_PROTOCOL_VERSION = "1.0"
+REVIEW_PROTOCOL_VERSION = "1.1"
 
 UNVERIFIED_STATUSES = {
     BenchmarkStatus.AI_DRAFT.value,
@@ -68,6 +70,165 @@ def resolve_gold_chunk_ids(
         if is_chunk_match(chunk.page, chunk.text, gold.page, gold.answer_span)
     ]
     return doc.doc_id, matches
+
+
+def classify_span(gold: GoldEvidence, chunks_by_doc: Dict[str, list], doc_id: Optional[str]) -> Tuple[str, str]:
+    """
+    Say *how* a recorded span relates to the stored text, not merely whether a tolerant match exists.
+
+    A reviewer is asked to confirm a span is verbatim. Reporting "found" for a span whose capitalisation
+    differs from the source invites a tick without reading, which is how an unverified label gets
+    promoted by accident. The verdicts, in decreasing order of trust:
+
+      exact                  -- the span appears character-for-character (whitespace collapsed)
+      case_only              -- only letter case differs
+      hyphen_or_space_repair -- only matches after line-break hyphen repair
+      other_page             -- absent on the recorded page, present elsewhere in the document
+      absent                 -- not in the stored text of that document
+      no_document            -- the sha256 in the annotation matches no indexed paper
+    """
+    span = (gold.answer_span or "").strip()
+    if doc_id is None:
+        return "no_document", "the source PDF is not in data/ — it must be re-uploaded before this item can be reviewed"
+    if not span:
+        return "absent", "no span text is recorded"
+
+    def collapse(s: str) -> str:
+        return re.sub(r"\s+", " ", s or "").strip()
+
+    page_chunks = [c for c in chunks_by_doc.get(doc_id, []) if c.page == gold.page]
+    other_chunks = [c for c in chunks_by_doc.get(doc_id, []) if c.page != gold.page]
+
+    for group, verdict_on_match, pages in ((page_chunks, "", "page"), (other_chunks, "other_page", "another page")):
+        for c in group:
+            raw = collapse(c.text)
+            if span in raw:
+                if verdict_on_match == "other_page":
+                    return "other_page", (
+                        f"the span appears verbatim on page {c.page}, not page {gold.page} — "
+                        "the page reference is wrong even though the wording is right"
+                    )
+                return "exact", "matches the stored text character for character"
+            if span.lower() in raw.lower():
+                if verdict_on_match == "other_page":
+                    return "other_page", (
+                        f"a case-folded match exists on page {c.page} rather than page {gold.page}"
+                    )
+                return "case_only", (
+                    "letter case differs from the source, so it is not verbatim as recorded — "
+                    "the reviewer must decide whether the annotation should read exactly as printed"
+                )
+        if any(normalize_text_span(c.text) and normalize_text_span(span) in normalize_text_span(c.text) for c in group):
+            if verdict_on_match == "other_page":
+                return "other_page", "only a hyphen-repaired match exists, on a different page"
+            return "hyphen_or_space_repair", (
+                "the span only matches after line-break hyphens are repaired — confirm the PDF really "
+                "prints it as one word"
+            )
+    return "absent", "the span is nowhere in this document's stored text — page, wording or chunking is wrong"
+
+
+def _reason_reads_as_apparent(conflict_reason: Optional[str]) -> bool:
+    """
+    True when the annotator's own reason frames the disagreement as condition-dependent.
+
+    The gold schema has no `apparent_conflict` member in EvidenceRelation, so apparent conflicts are
+    recorded as `contradicts`/`weakens` plus a free-text reason. When that reason says the results differ
+    *because a condition differs*, the label and the prose are pointing at different ledger relations.
+    """
+    text = (conflict_reason or "").lower()
+    if not text.strip():
+        return False
+    if not text.startswith(("apparent", "seemingly", "superficially")):
+        cues = ("because", "whereas", "while", "under different", "different condition", "instead")
+        if not any(cue in text for cue in cues):
+            return False
+    return any(
+        cue in text
+        for cue in (
+            "apparent",
+            "whereas",
+            "while",
+            "because",
+            "under identical",
+            "different setting",
+            "different condition",
+            "cannot be compared",
+        )
+    )
+
+
+def review_cautions(
+    gold: GoldEvidence,
+    question: Optional[BenchmarkQuestion],
+    span_verdict: str,
+    duplicate_of: List[str],
+) -> List[str]:
+    """
+    Everything about this item that a reviewer needs to know before deciding, derived from the data.
+
+    Nothing here changes a label. It exists because a checklist that hides its own hard cases produces
+    confidently wrong ground truth.
+    """
+    notes: List[str] = []
+    span = (gold.answer_span or "").strip()
+    relation = getattr(gold.expected_relation, "value", gold.expected_relation)
+
+    if span_verdict == "exact":
+        pass
+    elif span_verdict == "no_document":
+        notes.append("source document is not indexed — this item cannot be reviewed yet")
+    elif span_verdict == "absent":
+        notes.append("recorded span not found in the stored text of this document")
+    elif span_verdict == "other_page":
+        notes.append("page reference disagrees with where the span actually occurs")
+    elif span_verdict == "case_only":
+        notes.append("recorded span differs from the source in letter case — not verbatim as written")
+    elif span_verdict == "hyphen_or_space_repair":
+        notes.append("recorded span needs hyphen/whitespace repair to match the source")
+
+    if len(span) <= 12:
+        notes.append(
+            f"span is only {len(span)} characters — confirm it is the right cell/phrase and not a "
+            "coincidental substring elsewhere on the page"
+        )
+    if relation == "contradicts":
+        notes.append(
+            "expected relation is `contradicts` — the hardest label in this set. Two statements contradict "
+            "only if they assert opposite values for the same property under comparable conditions; "
+            "otherwise the correct label is `apparent_conflict` or `unresolved`"
+        )
+    if relation in ("contradicts", "weakens") and not (gold.conflict_reason or "").strip():
+        notes.append(
+            "a conflict-bearing relation recorded without a conflict_reason — the ledger needs the "
+            "differing condition in writing before it can label this `apparent_conflict`"
+        )
+    if relation == "contradicts" and _reason_reads_as_apparent(gold.conflict_reason):
+        notes.append(
+            "expected relation is `contradicts` but the recorded conflict_reason describes an apparent "
+            "conflict (it says the two results differ because of a condition, not because both cannot be "
+            "true) — these two fields disagree, and only the reviewer can say which one is right"
+        )
+    if duplicate_of:
+        notes.append(
+            f"identical span is also recorded by {', '.join(duplicate_of)} — one reading decides both, "
+            "so record the same verdict in each block"
+        )
+    if question is not None:
+        q_type = getattr(question.question_type, "value", question.question_type)
+        if q_type == "unanswerable":
+            notes.append("this question is an abstention probe; a gold span here is itself the finding — it should not exist")
+        if len(question.target_doc_ids or []) >= 2:
+            notes.append(
+                "cross-paper question — verify that this span belongs to the document recorded here, "
+                "and that a companion span exists for the other paper"
+            )
+        if q_type == "apparent_conflict" and relation == "supports":
+            notes.append(
+                "the question asks about a conflict but this span is labelled `supports`: that can be "
+                "correct (the span grounds one side of the answer), and the reviewer should say which reading applies"
+            )
+    return notes
 
 
 def is_human_verified(item) -> bool:
@@ -141,7 +302,15 @@ def build_worksheet(
     lines.append("1. Open the paper at the recorded page and find the quoted span.")
     lines.append("2. Confirm the span is verbatim, short, and answers the question.")
     lines.append("3. Confirm the relation: `supports` must entail, `apparent_conflict` must be explained by methods, data, metric or setting differences — not by a factual disagreement.")
-    lines.append("4. Record your handle as `human:<handle>`; otherwise leave the item's draft status untouched.")
+    lines.append(
+        "4. Note the schema: `expected_relation` has no `apparent_conflict` member, so an apparent conflict is "
+        "recorded as `contradicts` or `weakens` plus a `conflict_reason`. Judge the label and the reason together."
+    )
+    lines.append("5. Record your handle as `human:<handle>`; otherwise leave the item's draft status untouched.")
+    lines.append(
+        "6. A verdict of \"the span is right but the label is wrong\" is still a review finding — write it in "
+        "`observations`; do not silently edit the JSONL."
+    )
     lines.append("")
     lines.append("## Dataset status")
     lines.append("")
@@ -165,6 +334,50 @@ def build_worksheet(
         )
         lines.append("")
 
+    q_by_id = {q.question_id: q for q in questions}
+    span_keys: Dict[Tuple[str, int, str], List[str]] = {}
+    for g in gold_items:
+        span_keys.setdefault(((g.doc_sha256 or "").lower(), g.page, (g.answer_span or "").strip().lower()), []).append(g.gold_id)
+
+    verdict_by_gold: Dict[str, Tuple[str, str]] = {}
+    cautions_by_gold: Dict[str, List[str]] = {}
+    for g in gold_items:
+        doc_id, _matches = resolve_gold_chunk_ids(g, sha256_to_doc, chunks_by_doc)
+        verdict, explanation = classify_span(g, chunks_by_doc, doc_id)
+        verdict_by_gold[g.gold_id] = (verdict, explanation, doc_id)
+        duplicates = [gid for gid in span_keys[((g.doc_sha256 or "").lower(), g.page, (g.answer_span or "").strip().lower())] if gid != g.gold_id]
+        cautions_by_gold[g.gold_id] = review_cautions(g, q_by_id.get(g.question_id), verdict, duplicates)
+
+    lines.append("## Where to start")
+    lines.append("")
+    lines.append(
+        "Read [HUMAN-REVIEW-GUIDE.md](HUMAN-REVIEW-GUIDE.md) first: it explains what each relation label "
+        "means, how to check a page reference, and what a reviewer is committing to. "
+        "The items below are the ones where a careless tick does the most damage."
+    )
+    lines.append("")
+    hard = [g for g in gold_items if cautions_by_gold[g.gold_id]]
+    if hard:
+        lines.append("| Gold item | Why it needs care |")
+        lines.append("| --- | --- |")
+        for g in hard:
+            lines.append(f"| {g.gold_id} ({g.question_id}, p.{g.page}) | {'; '.join(cautions_by_gold[g.gold_id])} |")
+        lines.append("")
+        lines.append(
+            f"{len(hard)} of {len(gold_items)} items carry at least one caution. "
+            "A caution is a reading instruction, not a defect verdict: several are cross-paper or "
+            "short-span items that are perfectly annotated and simply need the reviewer to look carefully."
+        )
+    else:
+        lines.append("No item carried a caution in this generation.")
+    lines.append("")
+    exact = sum(1 for v in verdict_by_gold.values() if v[0] == "exact")
+    lines.append(
+        f"Against the stored corpus: {exact} of {len(gold_items)} spans match character for character; "
+        f"{len(gold_items) - exact} need a closer look for the reason shown in their block."
+    )
+    lines.append("")
+
     lines.append("## Review items")
     lines.append("")
 
@@ -185,7 +398,12 @@ def build_worksheet(
             continue
 
         for g in q_gold:
-            doc_id, matches = resolve_gold_chunk_ids(g, sha256_to_doc, chunks_by_doc)
+            verdict, explanation, doc_id = verdict_by_gold[g.gold_id]
+            matches = [
+                chunk.chunk_id
+                for chunk in chunks_by_doc.get(doc_id or "", [])
+                if is_chunk_match(chunk.page, chunk.text, g.page, g.answer_span)
+            ]
             lines.append(f"#### {g.gold_id} · page {g.page} · `{getattr(g.expected_relation, 'value', g.expected_relation)}`")
             lines.append("")
             lines.append(f"- Recorded span: “{g.answer_span}”")
@@ -198,18 +416,20 @@ def build_worksheet(
             )
             if doc_id is None:
                 lines.append(
-                    f"- Corpus check: **no indexed document matches sha256 {g.doc_sha256[:16]}…** "
-                    "— the source PDF is not in `data/`; re-upload it before reviewing."
+                    f"- Corpus check: **{verdict.replace('_', ' ')}** — "
+                    f"no indexed document matches sha256 {(g.doc_sha256 or '')[:16]}… ({explanation})"
                 )
-            elif not matches:
+            elif matches:
                 lines.append(
-                    f"- Corpus check: **the span was not found in {doc_id} on page {g.page}** "
-                    "— either the page, the wording, or the chunking is wrong. Flag it."
+                    f"- Corpus check: **{verdict.replace('_', ' ')}** in {doc_id} → {', '.join(sorted(matches)[:5])} — {explanation}"
                 )
             else:
                 lines.append(
-                    f"- Corpus check: found in {doc_id} → {', '.join(sorted(matches)[:5])}"
+                    f"- Corpus check: **{verdict.replace('_', ' ')}** — {explanation}. "
+                    f"Recorded source: {doc_id}, page {g.page}."
                 )
+            for caution in cautions_by_gold[g.gold_id]:
+                lines.append(f"- ⚠ {caution}")
             lines.append("")
             lines.append("- [ ] Page and span are verbatim in the PDF")
             lines.append("- [ ] The span actually answers the question")
