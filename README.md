@@ -117,8 +117,17 @@ The frontend reads the backend URL from `NEXT_PUBLIC_API_URL` (see `frontend/.en
 | `GEMINI_MODEL`, `GEMINI_THINKING_LEVEL`, `GEMINI_MAX_OUTPUT_TOKENS`, `GEMINI_TIMEOUT` | Model selection and request budget. |
 | `EMBEDDING_MODEL_NAME`, `RERANKER_MODEL_NAME` | Local retrieval models. |
 | `STORAGE_DIR`, `EVAL_DIR` | Where documents/chunks and run artifacts live. |
-| `HOST`, `PORT`, `ENVIRONMENT`, `LOG_LEVEL` | Server and logging. |
+| `MAX_UPLOAD_MB` (default 25), `MAX_PAGES` (default 150) | Ingestion limits enforced at upload and parse time. |
+| `HOST`, `PORT`, `ENVIRONMENT` | Server bind address and the environment label. |
+| `ALLOWED_ORIGINS` | CORS allow-list; defaults to `http://localhost:3000` and `http://127.0.0.1:3000`. |
 | `NEXT_PUBLIC_API_URL` | Frontend → backend base URL. |
+
+Two accuracy notes, because a portfolio README should not list a knob that does nothing:
+`EMBEDDING_MODEL_NAME` and `RERANKER_MODEL_NAME` are read directly by the dense and rerank
+modules (`backend/app/retrieval/dense.py:12`, `rerank.py:87`), not through `Settings`; and
+`LOG_LEVEL` is accepted in `.env.example` but is **not read by any code path** — log verbosity
+is whatever uvicorn defaults to. Changing it currently requires a command-line flag, not an env
+edit.
 
 No key, token, or credential value belongs in this repository. If a live key is ever pasted into a terminal or log, treat it as exposed and rotate it. The repository-side audit (what was scanned, what it found, and what it cannot establish) plus the manual revocation checklist the owner still has to perform is [docs/security-key-review.md](docs/security-key-review.md).
 
@@ -138,7 +147,7 @@ Re-uploading an existing PDF is a no-op: upload-deduplication by SHA-256, and ve
 
 | Method & path | Returns |
 | --- | --- |
-| `GET /health` | Service, model, and corpus state. |
+| `GET /health` | `status`, `version`, and a UTC `timestamp` — a liveness probe only. It reports no model name and no corpus counts; the Dashboard takes papers, pages and chunks from `GET /documents` and renders the health chip from reachability plus `version`. |
 | `GET /documents` | Indexed documents with page counts and extraction warnings. |
 | `GET /documents/{doc_id}` | One document. |
 | `GET /documents/{doc_id}/chunks` | Every stored passage for that document. |
